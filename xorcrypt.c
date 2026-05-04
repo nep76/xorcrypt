@@ -3,7 +3,6 @@
 #include <stdarg.h>
 #include <stdint.h>
 #include <string.h>
-#include <stdbool.h>
 #include <time.h>
 #include <sys/stat.h>
 #include <sys/file.h>
@@ -15,29 +14,103 @@
 #include <windows.h>
 #include <bcrypt.h>
 
-// つくった
-#define VERSION "250417"
+#define XNC_NAME    "xorcrypt"
+#define XNC_VERSION "260504"
 
-#define M_OP_DECRYPT      0x00000004
-#define M_OP_ENCRYPT      0x00000002
-#define M_OP_AUTO         0x00000001
-#define M_OP_UNDEF        0x00000000
+#define XNC_DEFAULT_EXT "xnc"
 
-#define F_ALLOW_OVERWRITE 0x00010000
+#define XNC_F_OVERWRITE 0x00020000
+#define XNC_F_VERBOSE   0x00010000
 
-#define STR_DEFAULT_EXT "xnc"
+#define XNC_BUF_SIZE    10485760 //10MB
+#define XNC_KEY_SIZE    32 //bytes
+#define XNC_HASH_SIZE   32 //bytes
+#define XNC_CHAR_SET    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+-_*/:;@[]()<>~={}!#$%&'"
 
+#ifdef _WIN32
+    #define MAX_PATH_LEN MAX_PATH
+    #define fseek64 _fseeki64
+    #define ftell64 _ftelli64
+#else
+    #define MAX_PATH_LEN PATH_MAX
+    #define fseek64 fseeko
+    #define ftell64 ftello
+#endif
 
-#define BUF_SIZE     10485760 //10MB
-#define KEY_SIZE     32 //bytes
-#define HASH_SIZE    32 //bytes
+enum RunMode {
+    XNC_AUTO = 0,
+    XNC_DECODE,
+    XNC_ENCODE,
+};
 
-#define CHAR_SET     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+-_*/:;@[]()<>~={}!#$%&'"
+static struct {
+    enum RunMode mode;
+    uint32_t flags;
+    char *ext;
+    char *outdir;
+} xnc;
 
-static bool _verbose = false;
-static unsigned char _xor_buffer[BUF_SIZE];
+static struct {
+    char path[MAX_PATH_LEN];
+    char dir[MAX_PATH_LEN];
+    char file[MAX_PATH_LEN];
+} st_path;
 
-void sha256sum( const unsigned char* input, DWORD inputLen, unsigned char* output ) {
+static unsigned char st_xnc_buffer[XNC_BUF_SIZE];
+
+// パスをディレクトリとファイル名に分けて正規化
+int get_dir_and_name_by_path( const char *src, char *dst_dir, char *dst_name, size_t max_len )
+{
+    char buf[MAX_PATH_LEN], *dst, *name = NULL;
+    size_t cnt = 0;
+
+    if( max_len < 1 ) return 0;
+
+    dst = buf;
+
+    // '\'を'/'へ置換
+    // 重複した'/'をまとめる
+    // 最後の'/'の位置（ディレクトリとファイル名の区切り）を保存
+    while( cnt < sizeof( buf ) - 1 && ( *dst = *src++ ) != '\0' ){
+        if( *dst == '\\' ) *dst = '/';
+        if( ( *src == '/' || *src == '\\' ) && *dst == '/' ) continue;
+        if( *dst == '/' ) name = dst;
+        dst++;
+        cnt++;
+    }
+    *dst = '\0';
+
+    // name（ファイル名候補）にファイル名が入っているか確認し空ならNULL
+    // 初めからnameがNULLの場合は区切り文字がないのでファイル名のみのパスとみなして
+    // ディレクトリパスを空に
+    if( name ){
+        *name++ = '\0';
+        if( name == dst ){
+            name = NULL;
+        }
+        if( strlen( buf ) + 1 < max_len ){
+            strcpy( dst_dir, buf );
+        } else{
+            return 0;
+        }
+    } else{
+        dst_dir[0] = '\0';
+        name = buf;
+    }
+
+    if( name ){
+        if( strlen( name ) + 1 < max_len ){
+            strcpy( dst_name, name );
+        } else{
+            return 0;
+        }
+    } else{
+        dst_name[0] = '\0';
+    }
+    return 1;
+}
+
+void sha256( const unsigned char* input, DWORD inputLen, unsigned char* output ) {
     BCRYPT_ALG_HANDLE hAlg = NULL;
     BCRYPT_HASH_HANDLE hHash = NULL;
     DWORD hashObjectSize = 0, cbData = 0;
@@ -60,7 +133,7 @@ void sha256sum( const unsigned char* input, DWORD inputLen, unsigned char* outpu
 
 char *keygen( char *buf, size_t len )
 {
-    const char *charset = CHAR_SET;
+    const char *charset = XNC_CHAR_SET;
     int cnum = strlen( charset );
 
     for( int i = 0; i < len - 1; i++ ){
@@ -71,7 +144,7 @@ char *keygen( char *buf, size_t len )
     return buf;
 }
 
-int calc_xor( unsigned char *buf, size_t buflen, unsigned char *key, size_t key_len )
+int xor( unsigned char *buf, size_t buflen, unsigned char *key, size_t key_len )
 {
     int cnt;
     for( cnt = 0; cnt < buflen; cnt++ ){
@@ -80,264 +153,249 @@ int calc_xor( unsigned char *buf, size_t buflen, unsigned char *key, size_t key_
     return cnt;
 }
 
+void _info( FILE *stream, const char *format, va_list ap )
+{
+    vfprintf( stream, format, ap );
+    fputc( '\n', stream );
+}
+
 void info( const char *format, ... )
 {
-    if( ! _verbose ) return;
+    if( ! ( xnc.flags & XNC_F_VERBOSE ) ) return;
 
     va_list ap;
     va_start( ap, format );
-    vprintf( format, ap );
+    _info( stdout, format, ap );
     va_end( ap );
-    printf( "\n" );
+}
+
+void einfo( const char *format, ... )
+{
+    va_list ap;
+    va_start( ap, format );
+    _info( stderr, format, ap );
+    va_end( ap );
 }
 
 void info_hash( const char *label, const unsigned char *hash, size_t len )
 {
-    if( ! _verbose ) return;
+    if( ! ( xnc.flags & XNC_F_VERBOSE ) ) return;
 
-    printf( "%s", label );
+    if( label ) printf( "%s: ", label );
     for( int i = 0; i < len; i++ ){
         printf( "%02x", hash[i] );
     }
     printf( "\n" );
 }
 
-// 動作モード、フラグ、入力ファイルパス、出力ファイルパス、キー、拡張子を渡して
-// ファイルを一つ操作する。AUTOモード時は入力ファイルパスによって動作が変化し、
-// ファイル名にextの拡張子が付いていれば暗号化ファイルと見なして複合モードへ、
-// そうでなければ平文ファイルと見なして暗号化モードへ切り替わる。
-// また、自動時は出力ファイルパスは出力ディレクトリパスとなる。
-// 未指定の場合は入力ファイルと同じディレクトリとなる。
-// 暗号化時は拡張子を付与して、そうでなければ拡張子を外したファイル名で生成する。
-// 指定したキーは暗号化時のみ使用され、複合時は不要なため無視される。
-//
-// 逆にAUTO以外のモード時は出力ファイルパスへキーを使って指定動作を行う。
-// このときextの拡張子設定は無視される。
-int dencrypt(
-    unsigned int mode,
-    unsigned int flags,
-    const char *arg_src,
-    const char *arg_dst,
-    const char *raw_key,
-    const char *ext
-){
-    char src_path[MAX_PATH];
-    char dst_path[MAX_PATH];
-    char *src_filename = NULL;
-    unsigned char key_buffer[KEY_SIZE];
-    unsigned char key[HASH_SIZE];
+void xor_conv( FILE *src, FILE *dst, int64_t fsize, unsigned char *key, size_t key_len )
+{
+    unsigned char *buf = st_xnc_buffer;
+    size_t buf_len, chunks, final_len, progress = 0;
 
-    FILE *src, *dst;
-    struct _stat64 src_stat, dst_stat;
-    __int64 file_size;
-    size_t buf_len, final_len;
-    unsigned int chunks;
-
-    //入力ファイル名を正規化
-    GetFullPathNameA( arg_src, MAX_PATH, src_path, &src_filename );
-
-    // 自動モードなら出力パスを生成してモードを特定
-    if( mode == M_OP_AUTO ){
-        char *dot;
-
-        if( ext == NULL ){
-            fprintf( stderr, "Extension name(-x option) is required in AUTO mode.");
-            return 1;
-        }
-
-        info( "Checking operation mode..." );
-
-        if( arg_dst ){
-            if( strlen( arg_dst ) + 1 + strlen( src_filename ) < MAX_PATH ){
-                strcpy( dst_path, arg_dst );
-                strcat( dst_path, "\\");
-                strcat( dst_path, src_filename );
-            } else{
-                fprintf( stderr, "Destination path is too logn.");
-            }
-        } else{
-            strcpy( dst_path, src_path );
-        }
-        dot = strrchr( dst_path, '.' );
-        if( dot && dot != dst_path && dot != &(dst_path[strlen(dst_path) - 1]) && strcasecmp( ++dot, ext ) == 0 ){
-            mode = M_OP_DECRYPT;
-            *dot = '\0';
-        } else{
-            mode = M_OP_ENCRYPT;
-            if( strlen( dst_path ) + 1 + strlen( ext ) < sizeof( dst_path ) ){
-                strcat( dst_path, "." );
-                strcat( dst_path, ext );
-            } else{
-                fprintf( stderr, "Destination path is too long." );
-                return 1;
-            }
-        }
-    }
-    
-    //エラーチェック
-    if ( strcasecmp( src_path, dst_path ) == 0 ){
-        fprintf( stderr, "DST_FILE_PATH is same as SRC_FILE_PATH: %s", src_path );
-        return 1;
-    }
-
-    if ( ! (flags & F_ALLOW_OVERWRITE)  && _stati64( dst_path, &dst_stat) == 0 ){
-        fprintf( stderr, "Destination path is already exists: %s", dst_path );
-        return 1;
-    }
-
-    src = fopen( src_path, "rb" );
-    if( ! src ){
-        fprintf( stderr, "Failed to open SRC_FILE_PATH: %s", src_path );
-        return 1;
-    }
-
-    dst = fopen( dst_path, "wb" );
-    if( ! dst ){
-        fprintf( stderr, "Failed to open DST_FILE_PATH: %s", dst_path );
-        return 1;
-    }
-
-    if( _fstati64( fileno( src ), &src_stat ) != 0 ){
-        fprintf( stderr, "Failed to get fstat for SRC_FILE_PATH." );
-        return 1;
-    }
-
-    //キーを取得
-    //複合モードでは対象のファイルの末尾に直接記録されてるハッシュ値を読み出す。
-    //暗号化モードでは生成された(あるいは指定された)キーを元にハッシュ値を算出。
-    if( mode == M_OP_DECRYPT ){
-        info( "Decrypt." );
-        _fseeki64( src, -((__int64)sizeof( key )), SEEK_END );
-        fread( key, sizeof( char ), sizeof( key ), src );
-        _fseeki64( src, 0, SEEK_SET );
-        file_size = src_stat.st_size - sizeof( key );
-    } else if( mode == M_OP_ENCRYPT ){
-        info( "Encrypt." );
-        if( ! raw_key ) raw_key = keygen( (char *)key_buffer, sizeof( key_buffer ) );
-        info( "Raw key: %s", raw_key );
-        sha256sum( (unsigned char *)raw_key, strlen( raw_key ), key );
-        file_size = src_stat.st_size;
-    } else{
-        fprintf( stderr, "GO DEBUG DUDE." );
-        return 1;
-    }
-    info_hash( "Hash key: ", key, sizeof( key ) );
+    fseek64( src, 0, SEEK_SET );
+    fseek64( dst, 0, SEEK_SET );
 
     // 一度に処理するチャンクのサイズと数、最後の端数を計算
-    buf_len   = (size_t)( BUF_SIZE / sizeof( key ) ) * sizeof( key );
-    chunks    = (size_t)( file_size / buf_len );
-    final_len = file_size - buf_len * chunks;
+    buf_len   = (size_t)( XNC_BUF_SIZE / key_len ) * key_len;
+    chunks    = (size_t)( fsize / buf_len );
+    final_len = fsize - buf_len * chunks;
 
-    // データに対しハッシュ値でXOR
-    info( "Input : %s", src_path );
-    info( "Output: %s", dst_path );
+
     while( chunks-- ){
-        fread( _xor_buffer, sizeof( char ), buf_len, src );
-        calc_xor( _xor_buffer, buf_len, key, sizeof( key ) );
-        fwrite( _xor_buffer, sizeof( char ), buf_len, dst );
+        if( xnc.flags & XNC_F_VERBOSE ){
+            printf( "\rProgress: %3d%% [%zu / %zu bytes]", (int)( progress * 100 / fsize ), progress, fsize );
+            fflush( stdout );
+        }
+        fread( buf, sizeof( char ), buf_len, src );
+        xor( buf, buf_len, key, key_len );
+        fwrite( buf, sizeof( char ), buf_len, dst );
+        progress += buf_len;
     }
 
     if( final_len ){
-        fread( _xor_buffer, sizeof( char ), final_len, src );
-        calc_xor( _xor_buffer, final_len, key, sizeof( key ) );
-        fwrite( _xor_buffer, sizeof( char ), final_len, dst );
+        fread( buf, sizeof( char ), final_len, src );
+        xor( buf, final_len, key, key_len );
+        fwrite( buf, sizeof( char ), final_len, dst );
+
+        progress += final_len;
+        if( xnc.flags & XNC_F_VERBOSE ){
+            printf( "\rProgress: 100%% [%zu / %zu bytes]", progress, fsize );
+            fflush( stdout );
+        }
     }
 
-    //暗号化モードでは複合時用にファイル末尾にハッシュ値をそのまま書きこみ
-    //複合時はこれをそのまま読みだして使う=パスワードを覚えなくていい
-    if( mode == M_OP_ENCRYPT ){
-        fwrite( key, sizeof( char ), sizeof( key ), dst );
-    }
-
-    fclose( src );
-    fclose( dst );
-
-    return 0;
+    info( "" );
 }
 
-int main( int argc, char *argv[] )
+int parse_args( int argc, char *argv[] )
 {
-    const char *wdir = NULL;
-    const char *raw_key = NULL;
-    const char *ext = STR_DEFAULT_EXT;
-
-    unsigned int mode = M_OP_UNDEF, flags = 0;
-
     int ret = 0, opt;
-    while( ( opt = getopt( argc, argv, "edafvw:k:x:" ) ) != -1 )
+    while( ( opt = getopt( argc, argv, "edfvo:x:" ) ) != -1 )
     {
         switch( opt )
         {
             case 'd':
-                if( mode != M_OP_UNDEF ){
-                    fprintf( stderr, "The operation mode is set to multiple." );
-                    return 1;
-                }
-                mode = M_OP_DECRYPT;
+                xnc.mode = XNC_DECODE;
+                ret++; //エラーチェック用
                 break;
             case 'e':
-                if( mode != M_OP_UNDEF ){
-                    fprintf( stderr, "The operation mode is set to multiple." );
-                    return 1;
-                }
-                mode = M_OP_ENCRYPT;
+                xnc.mode = XNC_ENCODE;
+                ret++; //エラーチェック用
                 break;
-            case 'a':
-                break;
-            case 'f':
-                flags |= F_ALLOW_OVERWRITE;
-                break;
-            case 'v':
-                _verbose = true;
-                break;
-            case 'w':
-                wdir = optarg;
-                break;
-            case 'k':
-                raw_key = optarg;
-                break;
+            case 'f': xnc.flags |= XNC_F_OVERWRITE; break;
+            case 'v': xnc.flags |= XNC_F_VERBOSE;   break;
+            case 'o': xnc.outdir = optarg;          break;
             case 'x':
-                if( strcmp( optarg, "" ) == 0 ){
-                    ext = NULL;
-                } else{
-                    ext = optarg;
-                }
+                if( strcmp( optarg, "" ) != 0 ) xnc.ext = optarg;
                 break;
             default:
-                fprintf( stderr, "Invalid argument: %c", opt );
-                return 1;
+                einfo( "Invalid argument: %c\n", opt );
+                return -1;
         }
     }
-    if( mode == M_OP_UNDEF ) mode = M_OP_AUTO;
+    if( ret > 1 ){
+        einfo( "Multiple modes specified.\n" );
+        return -1;
+    }
 
     if( argc < ( optind + 1 ) ){
-        fprintf( stderr, "Xor deNCrypter %s [%s %s]\n", VERSION, __DATE__, __TIME__ );
-        fprintf( stderr, "Usage: %s [-e | -d | -a(-a)] [-fv] [-w OUTPUT_DIR(AUTO MODE ONLY)] [-k RAW_KEY] [-x extension name for auto mode(%s)] SRC_FILE_PATH [FILE_PATH ...]", argv[0], STR_DEFAULT_EXT );
-        return 1;
-    } 
+        einfo( "Xor deNCrypter %s", XNC_VERSION );
+        einfo( "Usage: %s [-edfv] [-o dir] [-x ext] file [file ...]", XNC_NAME );
+        return -1;
+    }
+    return optind;
+}
+
+int main( int argc, char *argv[] )
+{
+    int args_offset, store_len;
+    enum RunMode mode;
+    char *dot, *src_path, *outdir, dst_path[MAX_PATH_LEN], key[XNC_KEY_SIZE], hash[XNC_HASH_SIZE];
+    FILE *src, *dst;
+    int64_t src_size;
+
+    xnc.flags  = 0;
+    xnc.ext    = XNC_DEFAULT_EXT;
+    xnc.outdir = NULL;
+
+    args_offset = parse_args( argc, argv );
+    if( args_offset < 0 ) return 1;
 
     srand( (unsigned int)time( NULL ) );
 
-    if( mode == M_OP_AUTO ){
-        char dst_dir[MAX_PATH];
-        struct _stat64 dir_stat;
+    for( int offset = args_offset; offset < argc ; offset++ ){
+        if( ! get_dir_and_name_by_path( argv[offset], st_path.dir, st_path.file, MAX_PATH_LEN ) ){
+            einfo( "Failed to parse srouce path strings: %s", argv[offset] );
+            continue;
+        }
 
-        if( wdir ){
-           GetFullPathNameA( wdir, MAX_PATH, dst_dir, NULL );
-            
-            if( _stati64( dst_dir, &dir_stat ) != 0 || ! S_ISDIR( dir_stat.st_mode ) || access( dst_dir, W_OK ) != 0 ){
-                fprintf( stderr, "Invalid output directory." );
-                return 1;
+        store_len = snprintf( st_path.path, MAX_PATH_LEN, "%s/%s", st_path.dir, st_path.file );
+        if( store_len >= MAX_PATH_LEN ){
+            einfo( "Source file path is too long." );
+            continue;
+        }
+
+        if( st_path.file[0] == '\0' ){
+            einfo( "Empty source file name specified." );
+            continue;
+        }
+
+        src_path = st_path.path;
+        outdir   = xnc.outdir ? xnc.outdir : st_path.dir;
+
+        info( "-----------------------------------------------" );
+        info( "Source file: %s/%s", st_path.dir, st_path.file );
+
+        dot = strrchr( st_path.file, '.' );
+        if( dot && strcasecmp( dot + 1, xnc.ext ) != 0 ){
+            dot = NULL;
+        }
+
+        // 動作モードを確定
+        if( xnc.mode == XNC_AUTO ){
+            mode = dot ? XNC_DECODE : XNC_ENCODE;
+        } else{
+            mode = xnc.mode;
+        }
+
+        src = fopen( src_path, "rb" );
+        if( ! src ){
+            einfo( "Failed to open source file: %s", src_path );
+            continue;
+        }
+
+        fseek64( src, 0, SEEK_END );
+        src_size = ftell64( src );
+
+        // 処理に必要な出力パスとハッシュ値を取得
+        if( mode == XNC_ENCODE ){
+            store_len = snprintf( dst_path, MAX_PATH_LEN, "%s/%s.%s", outdir, st_path.file, xnc.ext );
+            if( store_len >= MAX_PATH_LEN ){
+                einfo( "Filename too long." );
+                goto NEXT;
             }
-            wdir = dst_dir;
-        }
-        for( int offset = 0; optind + offset < argc ; offset++ ){
-            info( "-----------------------------------------------" );
-            ret += dencrypt( mode, flags, argv[optind + offset], wdir, raw_key, ext );
-        }
-    } else{
-        ret += dencrypt( mode, flags, argv[optind + 1], argv[optind + 2], raw_key, NULL );
-    }
 
-    return ret;
+            keygen( key, XNC_KEY_SIZE );
+            info( "Key: %s", key );
+
+            sha256( (unsigned char *)key, (DWORD)XNC_KEY_SIZE, (unsigned char *)hash );
+        } else if( mode == XNC_DECODE ){
+            if( dot ) *dot = '\0';
+
+            if( src_size < XNC_HASH_SIZE ){
+                info( "File size is too small. skipped.");
+                goto NEXT;
+            }
+
+            store_len = snprintf( dst_path, MAX_PATH_LEN, "%s/%s", outdir, st_path.file );
+             if( store_len >= MAX_PATH_LEN ){
+                einfo( "Filename too long." );
+                goto NEXT;
+            }
+
+            fseek64( src, -XNC_HASH_SIZE, SEEK_END );
+            fread( hash, sizeof( char ), XNC_HASH_SIZE, src );
+
+            src_size -= XNC_HASH_SIZE;
+        } else{
+            einfo( "GO DEBUG DUDE\n" );
+            goto NEXT;
+        }
+        info_hash( "Hash", (unsigned char *)hash, XNC_HASH_SIZE );
+
+        // エラーチェック
+        if( strcasecmp( src_path, dst_path ) == 0 ){
+            einfo( "Source file is same as output file. skipped." );
+            goto NEXT;
+        }
+
+        info( "Output file: %s", dst_path );
+        if( access( dst_path, F_OK ) == 0 && ! ( xnc.flags & XNC_F_OVERWRITE ) ){
+            einfo( "Output path is already exists: %s", dst_path );
+            goto NEXT;
+        }
+
+        dst = fopen( dst_path, "wb" );
+        if( ! dst ){
+            einfo( "Failed to open output file: %s", dst_path );
+            goto NEXT;
+        }
+
+        // 変換
+        info( "Processing..." );
+        xor_conv( src, dst, src_size, (unsigned char *)hash, XNC_HASH_SIZE );
+        if( mode == XNC_ENCODE ){
+            info( "Added hash for decode.");
+            fwrite( hash, sizeof( char ), XNC_HASH_SIZE, dst );
+        }
+
+        fclose( dst );
+        fclose( src );
+
+        continue;
+
+        NEXT:
+            if( src ) fclose( src );
+    }
 }
