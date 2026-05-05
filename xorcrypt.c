@@ -62,15 +62,6 @@ struct XncSeedXor{
     char key[XNC_KEY_SIZE + XNC_MAX_PASSWD + sizeof( uint64_t )];
 };
 
-union XncSeed{
-    struct {
-        char hash[XNC_HASH_SIZE];
-        uint64_t cnt;
-        uint64_t label;
-    } state;
-    unsigned char raw[XNC_HASH_SIZE + sizeof( uint64_t )];
-};
-
 static struct {
     enum XncRunMode mode;
     enum XncAlgorithm algo;
