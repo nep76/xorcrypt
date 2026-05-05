@@ -10,7 +10,7 @@
 #include <bcrypt.h>
 
 #define XNC_NAME    "xorcrypt"
-#define XNC_VERSION "26050500"
+#define XNC_VERSION "26050501"
 
 #define XNC_DEFAULT_EXT "xnc"
 
@@ -26,6 +26,10 @@
 
 #define XNC_KEY_STRECH_TIMES    100000
 #define XNC_KEY_STRECH_BUF_SIZE ( XNC_HASH_SIZE +  sizeof( uint32_t ) + XNC_KEY_SIZE + XNC_MAX_PASSWD )
+
+// ストリームに混ぜる定数
+#define XNC_SEED_STATE     0xC0DECAFE
+#define XNC_SEED_KEYSTREAM 0x00C0FFEE
 
 #ifdef _WIN32
     #define MAX_PATH_LEN MAX_PATH
@@ -54,14 +58,17 @@ struct XncSimpleXor {
 };
 
 struct XncSeedXor{
-    union {
-        struct {
-            char hash[XNC_HASH_SIZE];
-            uint64_t cnt;
-        } data;
-        unsigned char raw[XNC_HASH_SIZE + sizeof( uint64_t )];
-    } state;
+    char state[XNC_HASH_SIZE];
     char key[XNC_KEY_SIZE + XNC_MAX_PASSWD + sizeof( uint64_t )];
+};
+
+union XncSeed{
+    struct {
+        char hash[XNC_HASH_SIZE];
+        uint64_t cnt;
+        uint64_t label;
+    } state;
+    unsigned char raw[XNC_HASH_SIZE + sizeof( uint64_t )];
 };
 
 static struct {
@@ -361,26 +368,39 @@ int _algo_simple_xor( unsigned char *buf, size_t buflen, size_t offset, void *ct
     return 1;
 }
 
+#define _XNC_SEED_BUF (sizeof( uint32_t ) + sizeof( uint64_t ) + XNC_HASH_SIZE)
 int _algo_seed_xor( unsigned char *buf, size_t buflen, size_t offset, void *ctx )
 {
     struct XncSeedXor *c = (struct XncSeedXor *)ctx;
-    char hash[XNC_HASH_SIZE];
+    char keystream[XNC_HASH_SIZE];
     size_t h_offset;
     uint64_t cnt;
 
     for( size_t i = 0; i < buflen; i++ ){
         h_offset = ( offset + i ) % XNC_HASH_SIZE;
         if( h_offset == 0 || i == 0 ){
+            // [LABEL] || [COUNTER] || [STATE]
+            char seed[_XNC_SEED_BUF];
+            uint32_t label;
             cnt = ( offset + i ) / XNC_HASH_SIZE;
-            c->state.data.cnt = cnt;
-            sha256( (unsigned char *)c->state.raw, XNC_HASH_SIZE + sizeof( uint64_t ), (unsigned char *)hash );
-            memcpy( c->state.data.hash, hash, XNC_HASH_SIZE );
+
+            memcpy( (void *)seed + sizeof( uint32_t ) + sizeof( uint64_t ), c->state, XNC_HASH_SIZE );
+            memcpy( (void *)seed + sizeof( uint32_t ), &cnt, sizeof( uint64_t ) );
+
+            label = XNC_SEED_STATE;
+            memcpy( (void *)seed, &label, sizeof( uint32_t ) );
+            sha256( (unsigned char *)seed, _XNC_SEED_BUF, (unsigned char *)c->state );
+
+            label = XNC_SEED_KEYSTREAM;
+            memcpy( (void *)seed, &label, sizeof( uint32_t ) );
+            sha256( (unsigned char *)seed, _XNC_SEED_BUF, (unsigned char *)keystream );
         }
-        buf[i] ^= hash[h_offset];
+        buf[i] ^= keystream[h_offset];
     }
 
     return 1;
 }
+#undef _XNC_SEED_BUF
 
 int simple_xor( FILE *src, FILE *dst, enum XncRunMode mode, size_t src_size )
 {
@@ -454,6 +474,7 @@ int seed_xor( FILE *src, FILE *dst, enum XncRunMode mode, size_t src_size )
     }
 
     {
+        // [HASH] || [i] || [KEY] || [PASSWD]
         unsigned char key_strech[XNC_KEY_STRECH_BUF_SIZE] = { 0 };
 
         sha256( (unsigned char *)ctx.key, XNC_KEY_SIZE + pass_len, key_strech );
@@ -462,7 +483,7 @@ int seed_xor( FILE *src, FILE *dst, enum XncRunMode mode, size_t src_size )
             memcpy( key_strech + XNC_HASH_SIZE, &i, sizeof( uint32_t ) );
             sha256( key_strech, XNC_KEY_STRECH_BUF_SIZE, key_strech );
         }
-        memcpy( (void *)ctx.state.data.hash, key_strech, XNC_HASH_SIZE );
+        memcpy( (void *)ctx.state, key_strech, XNC_HASH_SIZE );
     }
     info_key( "Key: ", (unsigned char *)key, XNC_KEY_SIZE );
     xor_conv( src, dst, src_size, _algo_seed_xor, &ctx );
