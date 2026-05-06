@@ -22,14 +22,14 @@
 #define XNC_MAX_PASSWD  64 // char
 #define XNC_CHAR_SET    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+-_*/:;@[]()<>~={}!#$%&'"
 
-#define XNC_BUF_SIZE    10485760 //10MB
+#define XNC_BUF_SIZE    16777216 //16MB
 
 #define XNC_KEY_STRECH_TIMES    100000
 #define XNC_KEY_STRECH_BUF_SIZE ( XNC_HASH_SIZE +  sizeof( uint32_t ) + XNC_KEY_SIZE + XNC_MAX_PASSWD )
 
 // ストリームに混ぜる定数
-#define XNC_SEED_STATE     0xC0DECAFE
-#define XNC_SEED_KEYSTREAM 0x00C0FFEE
+#define XNC_SEED_STATE 0xC0DECAFE
+#define XNC_SEED_KS    0x00C0FFEE
 
 #ifdef _WIN32
     #define MAX_PATH_LEN MAX_PATH
@@ -52,14 +52,23 @@ enum XncAlgorithm {
     XNC_SEED_XOR
 };
 
+struct XncBCryptPvd{
+    BCRYPT_ALG_HANDLE h_alg;
+    PUCHAR hashobj;
+    DWORD hashobj_size;
+};
+
 struct XncSimpleXor {
-    char key[XNC_KEY_SIZE];
-    char hash[XNC_HASH_SIZE];
+    int h_off;
+    unsigned char key[XNC_KEY_SIZE];
+    unsigned char hash[XNC_HASH_SIZE];
 };
 
 struct XncSeedXor{
-    char state[XNC_HASH_SIZE];
-    char key[XNC_KEY_SIZE + XNC_MAX_PASSWD + sizeof( uint64_t )];
+    int h_off;
+    unsigned char state[XNC_HASH_SIZE];
+    uint64_t cnt;
+    unsigned char key[XNC_KEY_SIZE + XNC_MAX_PASSWD + sizeof( uint64_t )];
 };
 
 static struct {
@@ -72,10 +81,9 @@ static struct {
 } xnc;
 
 struct {
-    BCRYPT_ALG_HANDLE prvd;
-    PUCHAR hashobj;
-    DWORD hashobj_size;
-} st_bcrypt;
+    struct XncBCryptPvd sha256;
+    struct XncBCryptPvd hmac_sha256;
+} st_hashpvd;
 
 static struct {
     char path[MAX_PATH_LEN];
@@ -85,7 +93,7 @@ static struct {
 
 static unsigned char st_xnc_buffer[XNC_BUF_SIZE];
 
-typedef int (*XncConvAlgo)( unsigned char*, size_t, size_t, void* );
+typedef int (*XncConvAlgo)( unsigned char*, size_t, void* );
 
 void _info( FILE *stream, const char *format, va_list ap )
 {
@@ -164,17 +172,24 @@ int get_dir_and_name_by_path( const char *src, char *dst_dir, char *dst_name, si
     return 1;
 }
 
-void sha256_init()
+void hashgen_init()
 {
     DWORD result = 0;
     NTSTATUS rv = 0;
 
-    rv |= BCryptOpenAlgorithmProvider( &(st_bcrypt.prvd), BCRYPT_SHA256_ALGORITHM, NULL, 0 );
-    rv |= BCryptGetProperty( st_bcrypt.prvd, BCRYPT_OBJECT_LENGTH, (PUCHAR)&(st_bcrypt.hashobj_size), sizeof( DWORD ), &result, 0 );
-    st_bcrypt.hashobj = malloc( st_bcrypt.hashobj_size );
-    if( ! st_bcrypt.hashobj ){
+    rv |= BCryptOpenAlgorithmProvider( &(st_hashpvd.sha256.h_alg), BCRYPT_SHA256_ALGORITHM, NULL, 0 );
+    rv |= BCryptGetProperty( st_hashpvd.sha256.h_alg, BCRYPT_OBJECT_LENGTH, (PUCHAR)&(st_hashpvd.sha256.hashobj_size), sizeof( DWORD ), &result, 0 );
+    st_hashpvd.sha256.hashobj = malloc( st_hashpvd.sha256.hashobj_size );
+    if( ! st_hashpvd.sha256.hashobj ){
         rv |= 1;
     }
+
+    rv |= BCryptOpenAlgorithmProvider( &(st_hashpvd.hmac_sha256.h_alg), BCRYPT_SHA256_ALGORITHM, NULL, BCRYPT_ALG_HANDLE_HMAC_FLAG );
+    rv |= BCryptGetProperty( st_hashpvd.hmac_sha256.h_alg, BCRYPT_OBJECT_LENGTH, (PUCHAR)&(st_hashpvd.hmac_sha256.hashobj_size), sizeof( DWORD ), &result, 0 );
+    st_hashpvd.hmac_sha256.hashobj = malloc( st_hashpvd.hmac_sha256.hashobj_size );
+    if( ! st_hashpvd.hmac_sha256.hashobj ){
+        rv |= 1;
+    } 
 
     if( rv != 0 ){
         einfo( "Failed to initialize SHA256 provider. aborting." );
@@ -183,15 +198,29 @@ void sha256_init()
 }
 
 // 終端にNULLを書きこまない
-void sha256( const unsigned char *src, DWORD src_len, unsigned char *dst )
+#define sha256( msg, len, dst ) sha256hmac( msg, len, NULL, 0, dst )
+void sha256hmac( const unsigned char *msg, DWORD msg_len, unsigned char *key, DWORD key_len, unsigned char *dst )
 {
+    BCRYPT_ALG_HANDLE h;
+    PUCHAR hashobj;
+    DWORD hashobj_size;
     BCRYPT_HASH_HANDLE h_hash = NULL;
     NTSTATUS rv = 0;
 
-    rv = BCryptCreateHash( st_bcrypt.prvd, &h_hash, st_bcrypt.hashobj, st_bcrypt.hashobj_size, NULL, 0, 0);
+    if( key ){
+        h = st_hashpvd.hmac_sha256.h_alg;
+        hashobj = st_hashpvd.hmac_sha256.hashobj;
+        hashobj_size = st_hashpvd.hmac_sha256.hashobj_size;
+    } else{
+        h = st_hashpvd.sha256.h_alg;
+        hashobj = st_hashpvd.sha256.hashobj;
+        hashobj_size = st_hashpvd.sha256.hashobj_size;  
+    }
+
+    rv = BCryptCreateHash( h, &h_hash, hashobj, hashobj_size, key, key_len, 0);
     if( rv == 0 ){
-        rv |= BCryptHashData( h_hash, (PUCHAR)src, src_len, 0);
-        rv |= BCryptFinishHash( h_hash, dst, 32, 0);
+        rv |= BCryptHashData( h_hash, (PUCHAR)msg, msg_len, 0);
+        rv |= BCryptFinishHash( h_hash, dst, XNC_HASH_SIZE, 0);
         BCryptDestroyHash( h_hash );
     }
     
@@ -201,18 +230,20 @@ void sha256( const unsigned char *src, DWORD src_len, unsigned char *dst )
     }
 }
 
-void sha256_destroy()
+void hashgen_destroy()
 {
-    if( st_bcrypt.prvd )    BCryptCloseAlgorithmProvider( st_bcrypt.prvd, 0 );
-    if( st_bcrypt.hashobj ) free( st_bcrypt.hashobj );
+    // initは失敗するとexit()するのでここにくるなら初期化できているはず
+    BCryptCloseAlgorithmProvider( st_hashpvd.sha256.h_alg, 0 );
+    free( st_hashpvd.sha256.hashobj );
 
-    st_bcrypt.prvd         = NULL;
-    st_bcrypt.hashobj      = NULL;
-    st_bcrypt.hashobj_size = 0;
+    BCryptCloseAlgorithmProvider( st_hashpvd.hmac_sha256.h_alg, 0 );
+    free( st_hashpvd.hmac_sha256.hashobj );
+
+    memset( &st_hashpvd, 0, sizeof( st_hashpvd ) );
 }
 
 // 終端にNULLを書きこまない
-char *keygen( char *buf, size_t len )
+void keygen( unsigned char *buf, size_t len )
 {
     const char *charset = XNC_CHAR_SET;
     int cnum = strlen( charset );
@@ -220,8 +251,6 @@ char *keygen( char *buf, size_t len )
     for( int i = 0; i < len; i++ ){
         buf[i] = charset[rand() % cnum];
     }
-
-    return buf;
 }
 
 void info_key( const char *label, const unsigned char *hash, size_t len )
@@ -272,7 +301,7 @@ int xor_conv( FILE *src, FILE *dst, int64_t fsize, XncConvAlgo ca, void *ctx )
             einfo( "\nFailed to read source file in converting." );
             return 0;
         }
-        ca( buf, read_bytes, progress, ctx );
+        ca( buf, read_bytes, ctx );
         if( fwrite( buf, sizeof( char ), read_bytes, dst ) != read_bytes ){
             einfo( "\nFailed to write output file in coverting." );
             return 0;
@@ -332,12 +361,7 @@ int parse_args( int argc, char *argv[] )
         return -1;
     }
 
-    if( xnc.passwd ){
-        if( xnc.algo == XNC_SIMPLE_XOR ){
-            info( "Warning: xor mode does not use the password during decoding, so the password has no effect." );
-        }
-        if( xnc.passwd[0] == '\0' ) xnc.passwd = NULL;
-    }
+    if( xnc.passwd && xnc.passwd[0] == '\0' ) xnc.passwd = NULL;
 
     if( argc < ( optind + 1 ) ){
         einfo( "Xor deNCrypter %s", XNC_VERSION );
@@ -348,47 +372,48 @@ int parse_args( int argc, char *argv[] )
     return optind;
 }
 
-int _algo_simple_xor( unsigned char *buf, size_t buflen, size_t offset, void *ctx )
+int _algo_simple_xor( unsigned char *buf, size_t buflen, void *ctx )
 {
     struct XncSimpleXor *c = (struct XncSimpleXor *)ctx;
 
     for( size_t i = 0; i < buflen; i++ ){
-        buf[i] ^= c->hash[( offset + i ) % XNC_HASH_SIZE];
+        if( c->h_off >= XNC_HASH_SIZE ) c->h_off = 0;
+        buf[i] ^= c->hash[c->h_off++];
     }
 
     return 1;
 }
 
 #define _XNC_SEED_BUF (sizeof( uint32_t ) + sizeof( uint64_t ) + XNC_HASH_SIZE)
-int _algo_seed_xor( unsigned char *buf, size_t buflen, size_t offset, void *ctx )
+int _algo_seed_xor( unsigned char *buf, size_t buflen, void *ctx )
 {
     struct XncSeedXor *c = (struct XncSeedXor *)ctx;
-    char keystream[XNC_HASH_SIZE];
-    size_t h_offset;
-    uint64_t cnt;
+    unsigned char seed[_XNC_SEED_BUF];
+    unsigned char ks[XNC_HASH_SIZE];
+    uint32_t label;
 
     for( size_t i = 0; i < buflen; i++ ){
-        h_offset = ( offset + i ) % XNC_HASH_SIZE;
-        if( h_offset == 0 || i == 0 ){
-            // [LABEL] || [COUNTER] || [STATE]
-            char seed[_XNC_SEED_BUF];
-            uint32_t label;
-            cnt = ( offset + i ) / XNC_HASH_SIZE;
+        if( c->h_off == 0 || i == 0 ){ 
+            label = XNC_SEED_KS;
+            memcpy( (void *)seed, &label, sizeof( label ) );
+            memcpy( (void *)seed + sizeof( label ), &(c->cnt), sizeof( c->cnt ) );
+            memcpy( (void *)seed + sizeof( label ) + sizeof( c->cnt ), c->state, XNC_HASH_SIZE );
+            sha256( seed, _XNC_SEED_BUF, ks );
+        }
 
-            memcpy( (void *)seed + sizeof( uint32_t ) + sizeof( uint64_t ), c->state, XNC_HASH_SIZE );
-            memcpy( (void *)seed + sizeof( uint32_t ), &cnt, sizeof( uint64_t ) );
+        buf[i] ^= ks[c->h_off++];
+        
+        if( c->h_off >= XNC_HASH_SIZE ) c->h_off = 0;
+
+        if( c->h_off == 0 ){
+            c->cnt++;
 
             label = XNC_SEED_STATE;
-            memcpy( (void *)seed, &label, sizeof( uint32_t ) );
-            sha256( (unsigned char *)seed, _XNC_SEED_BUF, (unsigned char *)c->state );
-
-            label = XNC_SEED_KEYSTREAM;
-            memcpy( (void *)seed, &label, sizeof( uint32_t ) );
-            sha256( (unsigned char *)seed, _XNC_SEED_BUF, (unsigned char *)keystream );
-        }
-        buf[i] ^= keystream[h_offset];
+            memcpy( (void *)seed, &label, sizeof( label ) );
+            memcpy( (void *)seed + sizeof( label ), &(c->cnt), sizeof( c->cnt ) );
+            sha256( seed, _XNC_SEED_BUF, c->state );
+        }        
     }
-
     return 1;
 }
 #undef _XNC_SEED_BUF
@@ -396,12 +421,12 @@ int _algo_seed_xor( unsigned char *buf, size_t buflen, size_t offset, void *ctx 
 int simple_xor( FILE *src, FILE *dst, enum XncRunMode mode, size_t src_size )
 {
     struct XncSimpleXor ctx;
-    char hash[XNC_HASH_SIZE];
+    unsigned char hash[XNC_HASH_SIZE];
 
     switch( mode ){
         case XNC_ENCODE:
             keygen( ctx.key, XNC_KEY_SIZE );
-            sha256( (unsigned char *)ctx.key, XNC_KEY_SIZE, (unsigned char *)hash );
+            sha256( ctx.key, XNC_KEY_SIZE, hash );
             break;
         case XNC_DECODE:
             fseek64( src, -XNC_HASH_SIZE, SEEK_END );
@@ -411,20 +436,18 @@ int simple_xor( FILE *src, FILE *dst, enum XncRunMode mode, size_t src_size )
         default:
             return 0;
     }
-    
+    ctx.h_off = 0;
+
     if( xnc.passwd ){
-        // 一応パスワードをキー生成に使うが実質無意味
-        // (XNC_SIMPLE_XORモードはデコード時に末尾のキーをそのまま使う実装なのでパスワードが使われない)
-        char pass_key[XNC_HASH_SIZE + XNC_MAX_PASSWD];
+        unsigned char seed[XNC_HASH_SIZE + XNC_MAX_PASSWD];
         size_t pass_len = strlen( xnc.passwd );
-        if( pass_len > XNC_MAX_PASSWD ) pass_len = XNC_MAX_PASSWD;
-        memcpy( pass_key, hash, XNC_HASH_SIZE );
-        memcpy( pass_key + XNC_HASH_SIZE, xnc.passwd, pass_len );
-        sha256( (unsigned char *)pass_key, XNC_HASH_SIZE + pass_len, (unsigned char *)ctx.hash );
+        memcpy( (void *)seed, hash, XNC_HASH_SIZE );
+        memcpy( (void *)seed + XNC_HASH_SIZE, xnc.passwd, pass_len );
+        sha256( seed, XNC_HASH_SIZE + pass_len, ctx.hash );
     } else{
         memcpy( ctx.hash, hash, XNC_HASH_SIZE );
     }
-    
+
     info_hash( "Hash: ", (unsigned char *)ctx.hash, XNC_HASH_SIZE );
     
     // 変換
@@ -441,7 +464,7 @@ int simple_xor( FILE *src, FILE *dst, enum XncRunMode mode, size_t src_size )
 int seed_xor( FILE *src, FILE *dst, enum XncRunMode mode, size_t src_size )
 {
     struct XncSeedXor ctx;
-    char key[XNC_KEY_SIZE];
+    unsigned char key[XNC_KEY_SIZE];
     size_t pass_len = 0;
 
     switch( mode ){
@@ -466,16 +489,19 @@ int seed_xor( FILE *src, FILE *dst, enum XncRunMode mode, size_t src_size )
 
     {
         // [HASH] || [i] || [KEY] || [PASSWD]
-        unsigned char key_strech[XNC_KEY_STRECH_BUF_SIZE] = { 0 };
+        unsigned char key_strech[XNC_KEY_STRECH_BUF_SIZE];
 
         sha256( (unsigned char *)ctx.key, XNC_KEY_SIZE + pass_len, key_strech );
         memcpy( key_strech + XNC_HASH_SIZE + sizeof( uint32_t ), ctx.key, XNC_KEY_SIZE + pass_len );
         for( uint32_t i = 0; i < XNC_KEY_STRECH_TIMES; i++ ){
             memcpy( key_strech + XNC_HASH_SIZE, &i, sizeof( uint32_t ) );
-            sha256( key_strech, XNC_KEY_STRECH_BUF_SIZE, key_strech );
+            sha256( key_strech, XNC_HASH_SIZE + sizeof( uint32_t ) + XNC_KEY_SIZE + pass_len, key_strech );
         }
         memcpy( (void *)ctx.state, key_strech, XNC_HASH_SIZE );
     }
+
+    ctx.cnt = 0;
+
     info_key( "Key: ", (unsigned char *)key, XNC_KEY_SIZE );
     xor_conv( src, dst, src_size, _algo_seed_xor, &ctx );
 
@@ -504,7 +530,7 @@ int main( int argc, char *argv[] )
     args_offset = parse_args( argc, argv );
     if( args_offset < 0 ) return 1;
 
-    sha256_init();
+    hashgen_init();
 
     {
         char *algo_name[] = { "xor", "seed-xor" };
@@ -627,7 +653,7 @@ int main( int argc, char *argv[] )
             if( src ) fclose( src );
     }
 
-    sha256_destroy();
+    hashgen_destroy();
 
     return rv;
 }

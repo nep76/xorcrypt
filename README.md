@@ -100,6 +100,8 @@ for( 0...100000 )
 以後は`state`から生成した`keystream`を使ってデータをXORしていきますが、鍵長(36バイト)毎にこれを更新します。
 ```text
 count = file-size / key-length
+label1 = 0xC0DECAFE
+label2 = 0x00C0FFEE
 ...
 if( ( file-size % key-length ) == 0 )
     state     = SHA256( label1 || count || state )
@@ -107,4 +109,127 @@ if( ( file-size % key-length ) == 0 )
     count = count + 1
 ```
 パスワードが未設定だとこのうちの`password`が空になるため、ランダム32文字の`salt`だけで処理が行われ結果的にスクランブル（難読化）として動作します。
+
+### Recovery
+復号するための概念的なCコードを書いておきます。fseekとかftellみたいなのは実際にはファイルサイズや環境に合わせて_fseeki64とかfseeko_とかに読み替えてください。
+
+1. まずファイルの末尾に記録されている32文字の`salt`を取り出します。これはハッシュ値ではなくコード内の`XNC_CHAR_SET`内の文字列からランダムに生成されたASCII文字列で「`7iO%v]Lt&lv@ihd}>XS&]LIlj+xrbu-b`」のようなデータになっています。
+1. 取り出した文字列と設定したパスワードを結合してSHA256にでハッシュ値を生成します。
+```c
+#define HASH_LEN   32
+#define SALT_LEN   32
+#define PASSWD_MAX 64
+// 内部状態として使うハッシュ値の保存先
+static unsigned char state[HASH_LEN];
+
+...
+
+char *passwd = "YOUR_PASSWORD";
+
+// xncファイルの末尾からsaltを取り出す
+char salt[32];
+FILE *src = fopen( "./scrambled_file.txt.xnc", "rb" );
+fseek( src, -(SALT_LEN), SEEC_END );
+fread( src, 1, SALT_LEN, salt );
+
+// seed: ( salt || passwd )
+char seed[SALT_LEN + PASSWD_MAX]; //salt + passwdが入るサイズ
+size_t passwd_length = strlen( passwd );
+memcpy( (void *)seed, salt, SALT_LEN );
+memcpy( (void *)seed + SALT_LEN, passwd, passwd_length );
+
+// seedを渡してstateにハッシュ値を得る
+sha256( seed, SALT_LEN + password_length, state );
+```
+
+3. この`state`を100000回SHA256に渡して鍵伸長（もどき）をします。この時のseedは`state || i || salt || passwd`で回します。
+```c
+// seed: ( state || [PLACEHOLDER 32bit] || salt || passwd )
+char seed[HASH_LEN + sizeof( uint32_t ) + SALT_LEN + PASSWD_MAX];
+uint32_t i;
+memcpy( (void *)seed, state, HASH_LEN );
+memcpy( (void *)seed + HASH_LEN + sizeof( i ), salt, 32 );
+memcpy( (void *)seed + HASH_LEN + sizeof( i ) + SALT_LEN, passwd, passwd_length );
+
+// 100000回SHA256を繰り返す
+for( i = 0; i < 100000; i ++ ){
+    // seedの[placeholder]にループカウンタを入れる
+    memcpy( (void *)seed + HASH_LEN, &i, sizeof( i ) );
+
+    // seedを渡してstateにハッシュ値を得る
+    sha256( (void *)seed, HASH_LEN + sizeof( i ) + SALT_LEN + passwd_length, state );
+}
+```
+1. この`state`を元に`SHA256( label(32bit) || counter(64bit) || state)`で`keystream`を生成してファイルにXORしていきます。ただし、32バイト処理毎これらを更新します。
+```c
+#define LABEL_STATE 0xC0DECAFE
+#define LABEL_KS    0x00C0FFEE
+
+void state_update(
+    const unsigned char *src_state,
+    const uint64_t counter,
+    unsigned char *dst_state,
+    unsigned char *dst_ks
+){
+    // seed: ( label 32bit || counter 64bit || state )
+    unsigned char seed[sizeof( uint32_t ) + sizeof( uint64_t ) + HASH_LEN];
+    uint32_t label;
+    unsigned char hash[HASH_LEN];
+
+    // state更新用のseedを作る
+    label = LABEL_STATE;
+    memcpy( (void *)seed, &label, sizeof( label ) );
+    memcpy( (void *)seed + sizeof( label ), &counter, sizeof( counter ) );
+    memcpy( (void *)seed + sizeof( label ) + sizeof( counter ), src_state, HASH_LEN );
+
+    // stateを更新
+    sha256( (void *)seed, sizeof( seed ), dst_state );
+
+    // seedのlabelを書き換えてkeystream更新用のseedを作る
+    label = LABEL_KS;
+    memcpy( (void *)seed, &label, sizeof( uint32_t ) );
+
+    // keystreamを更新
+    sha256( (void *)seed, sizeof( seed ), dst_ks );
+}
+
+void seed_xor(
+    unsigned char *buf,
+    size_t length,
+    uint64_t offset
+){
+    unsigned char ks[HASH_LEN];
+    uint64_t counter;
+    int h_off;
+
+    for( size_t i = 0; i < length; i++ ){
+        // ファイル読み出し位置からハッシュのどのバイトを使うかオフセットを計算
+        h_off = ( offset + i ) % HASH_LEN;
+
+        // h_offが0、またはi = 0の時はstate更新
+        //   h_off == 0: ハッシュの32バイトを使い切ったので
+    }
+}
+
+...
+
+unsigned char buf[2048]; // バッファサイズは自由
+uint64_t filesize, readbytes, processed = 0;
+
+// ファイルサイズ取得
+fseek( src, 0, SEEK_END );
+filesize = ftell( src );
+
+// XOR開始
+fseek( src, 0, SEEK_SET );
+while( processed < filesize ){
+    readbytes = fread( buf, 1, sizeof( buf ), src );
+    seed_xor( buf, read_bytes, processed );
+    fwrite( buf, 1, read_bytes, dst );
+}
+
+
+
+
+
 </details>
