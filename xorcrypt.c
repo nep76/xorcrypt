@@ -10,7 +10,7 @@
 #include <bcrypt.h>
 
 #define XNC_NAME    "xorcrypt"
-#define XNC_VERSION "26050501"
+#define XNC_VERSION "26050600"
 
 #define XNC_DEFAULT_EXT "xnc"
 
@@ -384,36 +384,35 @@ int _algo_simple_xor( unsigned char *buf, size_t buflen, void *ctx )
     return 1;
 }
 
-#define _XNC_SEED_BUF (sizeof( uint32_t ) + sizeof( uint64_t ) + XNC_HASH_SIZE)
+#define _XNC_SEED_BUF (sizeof( uint32_t ) + sizeof( uint64_t ))
 int _algo_seed_xor( unsigned char *buf, size_t buflen, void *ctx )
 {
     struct XncSeedXor *c = (struct XncSeedXor *)ctx;
-    unsigned char seed[_XNC_SEED_BUF];
+    unsigned char msg[_XNC_SEED_BUF];
     unsigned char ks[XNC_HASH_SIZE];
     uint32_t label;
 
     for( size_t i = 0; i < buflen; i++ ){
         if( c->h_off == 0 || i == 0 ){ 
             label = XNC_SEED_KS;
-            memcpy( (void *)seed, &label, sizeof( label ) );
-            memcpy( (void *)seed + sizeof( label ), &(c->cnt), sizeof( c->cnt ) );
-            memcpy( (void *)seed + sizeof( label ) + sizeof( c->cnt ), c->state, XNC_HASH_SIZE );
-            sha256( seed, _XNC_SEED_BUF, ks );
+            memcpy( (void *)msg, &label, sizeof( label ) );
+            memcpy( (void *)msg + sizeof( label ), &(c->cnt), sizeof( c->cnt ) );
+            sha256hmac( msg, sizeof( msg ), c->state, XNC_HASH_SIZE, ks );
         }
 
         buf[i] ^= ks[c->h_off++];
-        
+
         if( c->h_off >= XNC_HASH_SIZE ) c->h_off = 0;
 
         if( c->h_off == 0 ){
             c->cnt++;
-
             label = XNC_SEED_STATE;
-            memcpy( (void *)seed, &label, sizeof( label ) );
-            memcpy( (void *)seed + sizeof( label ), &(c->cnt), sizeof( c->cnt ) );
-            sha256( seed, _XNC_SEED_BUF, c->state );
+            memcpy( (void *)msg, &label, sizeof( label ) );
+            memcpy( (void *)msg + sizeof( label ), &(c->cnt), sizeof( c->cnt ) );
+            sha256hmac( msg, sizeof( msg ), c->state, XNC_HASH_SIZE, c->state );
         }        
     }
+
     return 1;
 }
 #undef _XNC_SEED_BUF
@@ -438,6 +437,8 @@ int simple_xor( FILE *src, FILE *dst, enum XncRunMode mode, size_t src_size )
     }
     ctx.h_off = 0;
 
+    // パスワードが設定されている場合はキーとパスワードを合わせて
+    // もう一度ハッシュ化したものを最終的なキーにする
     if( xnc.passwd ){
         unsigned char seed[XNC_HASH_SIZE + XNC_MAX_PASSWD];
         size_t pass_len = strlen( xnc.passwd );
@@ -486,21 +487,32 @@ int seed_xor( FILE *src, FILE *dst, enum XncRunMode mode, size_t src_size )
         if( pass_len > XNC_MAX_PASSWD ) pass_len = XNC_MAX_PASSWD;
         memcpy( ctx.key + XNC_KEY_SIZE, xnc.passwd, pass_len );
     }
+    ctx.h_off = 0;
+    ctx.cnt = 0;
 
     {
-        // [HASH] || [i] || [KEY] || [PASSWD]
-        unsigned char key_strech[XNC_KEY_STRECH_BUF_SIZE];
+        // key_strechは SHA256 をin-place（入力と出力に同じポインタを指定）で更新するバッファ。
+        // CNG/OpenSSLのSHA256は入力を読み終えてから出力を書くためin-placeでも安全。
+        // 初回はstateの代わりにlabel（4バイト）を入れるので、未使用領域をゼロクリアしている。
 
-        sha256( (unsigned char *)ctx.key, XNC_KEY_SIZE + pass_len, key_strech );
-        memcpy( key_strech + XNC_HASH_SIZE + sizeof( uint32_t ), ctx.key, XNC_KEY_SIZE + pass_len );
-        for( uint32_t i = 0; i < XNC_KEY_STRECH_TIMES; i++ ){
+        // [HASH] || [i] || [KEY] || [PASSWD]
+        unsigned char key_strech[XNC_KEY_STRECH_BUF_SIZE] = { 0 }; // 必ずゼロクリア
+        unsigned char msg[sizeof( uint32_t ) + sizeof( uint64_t )];
+        uint32_t label = XNC_SEED_STATE;
+        uint32_t i = 0;
+
+        memcpy( key_strech, &label, sizeof( label ) ); //本来32バイトのstateを入れるエリアに代わりにlabel（4バイト)を入れる
+        memcpy( key_strech + XNC_HASH_SIZE, &i, sizeof( i ) );
+        memcpy( key_strech + XNC_HASH_SIZE + sizeof( i ), ctx.key, XNC_KEY_SIZE + pass_len );
+        sha256( key_strech, XNC_HASH_SIZE + sizeof( uint32_t ) + XNC_KEY_SIZE + pass_len, key_strech );
+        for( ; i < XNC_KEY_STRECH_TIMES; i++ ){
             memcpy( key_strech + XNC_HASH_SIZE, &i, sizeof( uint32_t ) );
             sha256( key_strech, XNC_HASH_SIZE + sizeof( uint32_t ) + XNC_KEY_SIZE + pass_len, key_strech );
         }
-        memcpy( (void *)ctx.state, key_strech, XNC_HASH_SIZE );
+        memcpy( msg, &label, sizeof( label ) );
+        memcpy( msg + sizeof( label ), &ctx.cnt, sizeof( ctx.cnt ) );
+        sha256hmac( msg, sizeof( msg ), key_strech, XNC_HASH_SIZE, ctx.state );
     }
-
-    ctx.cnt = 0;
 
     info_key( "Key: ", (unsigned char *)key, XNC_KEY_SIZE );
     xor_conv( src, dst, src_size, _algo_seed_xor, &ctx );
