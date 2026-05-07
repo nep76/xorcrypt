@@ -11,12 +11,12 @@
 
 ## Build
 ```sh
-gcc -O3 -s xorcrypt.c -o xorcrypt.exe -lbcrypt
+gcc -O3 -s -mavx2 xorcrypt.c -o xorcrypt.exe -lbcrypt
 ```
 
 ## Usage
 ```text
-Usage: xorcrypt [-edfv] [-o dir] [-x ext] [-a xor|seed-xor] [-p passwd ] file [file ...]
+Usage: xorcrypt [-edfv] [-o dir] [-x ext] [-p passwd ] [-a xor|seed-xor] file [file ...]
 ```
 * `-e`: 指定されたファイルを難読化するスクランブルモードを強制  
 （無指定で自動判別）
@@ -26,10 +26,10 @@ Usage: xorcrypt [-edfv] [-o dir] [-x ext] [-a xor|seed-xor] [-p passwd ] file [f
 * `-v`: 処理経過の詳細表示モード
 * `-o`: 出力先ディレクトリ  （デフォルトはカレントディレクトリ）
 * `-x`: スクランブルしたファイルまたは自動判別に使用する拡張子（デフォルトはxnc）
+* `-p`: パスワード（パスワードなしも可能）
 * `-a`: XOR変換アルゴリズム
   - xor: 単純変換モード（デフォルト）
   - seed-xor: 限定的用途（[seed-xor](#seed-xor)参照）
-* `-p`: パスワード（パスワードなしも可能）
 * `file ...`: 変換対象のファイル
 
 複数のjpgをC:/Users/user/secretに変換して出力する例:
@@ -101,7 +101,7 @@ SHA256の拡散効果で単純XORよりもパターンが隠ぺいされやす�
 ```text
 initial state = SHA256( BE32(0xC0DECAFE) || 0(パディング28バイト分) || BE32(0) || salt || password )
 ```
-3. 次にこの初期ハッシュを使ってHMAC-SHA256で再ハッシュ化を1000000回繰り返して簡易鍵伸長をします。
+3. 次にこの初期ハッシュを使ってHMAC-SHA256で再ハッシュ化を1,000,000回繰り返して簡易鍵伸長をします。
 ```text
 for( uint32 i = 0...999999 )
     state = HMAC-SHA256( state,  BE32(i) || salt || password )
