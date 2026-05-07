@@ -104,7 +104,7 @@ initial state = SHA256( BE32(0xC0DECAFE) || 0(パディング28バイト分) || 
 3. 次にこの初期ハッシュを使ってHMAC-SHA256で再ハッシュ化を1,000,000回繰り返して簡易鍵伸長をします。
 ```text
 for( uint32 i = 0...999999 )
-    state = HMAC-SHA256( state,  BE32(i) || salt || password )
+    state = HMAC-SHA256( state,  state || BE32(i) || salt || password )
 ```
 4. 鍵伸長を終えた鍵を以下のようにハッシュ化してマスターハッシュを生成します。
 ```text
