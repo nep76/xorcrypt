@@ -30,6 +30,8 @@
             "args": [
                 "-O3",
                 "-s",
+                "-mavx2",
+                "-fopt-info-vec-optimized",
                 "-Wall",
                 "${file}",
                 "-o",
