@@ -49,7 +49,7 @@ Windowsの右クリックの「送る」から使うことを想定している�
 
 > [!Note]
 > * パスワードは簡単だったので追加しましたが、パスワードをつけるなら普通に暗号化した方が良いと思います。
-> * スクランブルモードは自動的に指定拡張子を付与し、複合モードは指定拡張子を外す動作をします。これは自動判別に関わらず行われるので通常は`-e`や`-d`を指定せずに自動判別モードで使用してください。
+> * スクランブルモードは自動的に指定拡張子を付与し、復元モードは指定拡張子を外す動作をします。これは自動判別に関わらず行われるので通常は`-e`や`-d`を指定せずに自動判別モードで使用してください。
 
 ## How it works
 1. ランダムに生成した文字列からSHA-256ハッシュ値(32バイト)を生成
@@ -94,7 +94,7 @@ SHA256の拡散効果で単純XORよりもパターンが隠ぺいされやす�
 1. 最後に`salt`をファイル末尾に書き込む
 
 ### Recovery
-復号するための手順と概念的なコードを書いておきます。コード中でハッシュ関数に入力する整数値はすべてビッグエンディアンです。(BE32やBE64と表記します)
+一応復号するための手順と概念的なコードを書いておきます。コード中でハッシュ関数に入力する整数値はすべてビッグエンディアンです。(BE32やBE64と表記します)
 
 1. まずファイルの末尾に記録されている32文字の`salt`を取り出します。これはハッシュ値ではなくコード内の`XNC_CHAR_SET`内の文字列からランダムに生成されたASCII文字列で「`7iO%v]Lt&lv@ihd}>XS&]LIlj+xrbu-b`」のようなデータになっています。
 1. 取り出した文字列と設定したパスワードを使って以下の方法で初期ハッシュを生成します。
@@ -104,29 +104,31 @@ initial state = SHA256( BE32(0xC0DECAFE) || 0(パディング28バイト分) || 
 3. 次にこの初期ハッシュを使ってHMAC-SHA256で再ハッシュ化を1,000,000回繰り返して簡易鍵伸長をします。
 ```text
 for( uint32 i = 0...999999 )
-    state = HMAC-SHA256( state,  state || BE32(i) || salt || password )
+    state = HMAC-SHA256( key=state,  message=state || BE32(i) || salt || password )
 ```
 4. 鍵伸長を終えた鍵を以下のようにハッシュ化してマスターハッシュを生成します。
 ```text
-state = HMAC-SHA256( state, BE32(0xC0DECAFE) || BE64(0) )
+state = HMAC-SHA256( key=state, message=BE32(0xC0DECAFE) || BE64(0) )
 ```
 5. この`state`を使って`keystream`を生成し、実際にXOR演算をしていきます。ただし、SHA256のビット長である32バイト処理するごとにこれらを更新します。
 ```text
-uint64 cnt = 0
-j = 0
-for( i = 0...filesize )
-    if( i == 0 or j == 0 )
-        keystream = HMAC-SHA256( state, BE32(0x00C0FFEE) || BE64(cnt) )
+// カウンターを初期化
+cnt = 0
 
-    chipher = plaintext[i] ^ keystream[j]
+// 1ブロック32バイトとしてファイルが何ブロックあるか計算
+blocks = trunc( ( filesize + 31 ) / 32 ) 
 
-    j = j + 1
+for( i = 0; i < blocks; i = i + 1 )
+    keystream = HMAC-SHA256( key=state, message=BE32(0x00C0FFEE) || BE64(cnt) )
+
+    // ファイル終端の端数は上手く帳尻あわせてください
+    for( j = 0; j < 32; j = j + 1 )
+        plaintext = chiphertext[j] ^ keystream[j]
     
-    if( j == 32 ) j = 0
+    chiphertext = chiphertext + 32;
 
-    if( j == 0 )
-        cnt   = cnt + 1
-        state = HMAC-SHA256( state, BE32(0xC0DECAFE) || BE64(cnt) )
+    cnt = cnt + 1
+    state = HMAC-SHA256( key=state, message=BE32(0xC0DECAFE) || BE64(cnt) )
 ```
-6. バグがなければこれで復元できる…はず。
+6. バグがなければこれで復号できる…はず。
 </details>

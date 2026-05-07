@@ -393,7 +393,7 @@ int _algo_seed_xor( unsigned char *restrict buf, size_t blocks, void *ctx )
 
     for( size_t i = 0; i < blocks; i++ ){
         msg.label_be = xnc_be32( XNC_SEED_KS );
-        msg.cnt_be = xnc_be64( c->cnt );
+        msg.cnt_be   = xnc_be64( c->cnt );
         sha256hmac( (unsigned char *)&msg, sizeof( msg ), c->state, sizeof( c->state ), ks );
 
         for( int j = 0; j < XNC_HASH_SIZE; j++ ){
@@ -403,7 +403,7 @@ int _algo_seed_xor( unsigned char *restrict buf, size_t blocks, void *ctx )
 
         c->cnt++;
         msg.label_be = xnc_be32( XNC_SEED_STATE );
-        msg.cnt_be = xnc_be64( c->cnt );
+        msg.cnt_be   = xnc_be64( c->cnt );
         sha256hmac( (unsigned char *)&msg, sizeof( msg ), c->state, sizeof( c->state ), c->state ); 
     }
     return 1;
