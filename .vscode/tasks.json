@@ -1,20 +1,9 @@
 {
     "tasks": [
         {
-            "type": "cppbuild",
-            "label": "C/C++: w64devkit gcc Debug",
-            "command": "gcc",
-            "args": [
-                "-g",
-                "-Wall",
-                "${file}",
-                "-o",
-                "${fileDirname}\\${fileBasenameNoExtension}.exe",
-                "-lbcrypt"
-            ],
-            "options": {
-                "cwd": "${workspaceFolder}",
-            },
+            "type": "shell",
+            "label": "build",
+            "command": "make",
             "problemMatcher": [
                 "$gcc"
             ],
@@ -24,23 +13,12 @@
             }
         },
         {
-            "type": "cppbuild",
-            "label": "C/C++: w64devkit gcc Release",
-            "command": "gcc",
+            "type": "shell",
+            "label": "clean",
+            "command": "make",
             "args": [
-                "-O3",
-                "-s",
-                "-mavx2",
-                "-fopt-info-vec-optimized",
-                "-Wall",
-                "${file}",
-                "-o",
-                "${fileDirname}\\${fileBasenameNoExtension}.exe",
-                "-lbcrypt"
+                "clean"
             ],
-            "options": {
-                "cwd": "${workspaceFolder}",
-            },
             "problemMatcher": [
                 "$gcc"
             ],

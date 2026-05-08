@@ -1,132 +1,32 @@
-#include <stdio.h>
-#include <stdarg.h>
-#include <stdint.h>
-#include <string.h>
-#include <time.h>
-#include <sys/file.h>
+#include "xorcrypt.h"
 #include <getopt.h>
-
-#define XNC_NAME    "xorcrypt"
-#define XNC_VERSION "26050700"
-
-#define XNC_DEFAULT_EXT "xnc"
-
-#define XNC_F_OVERWRITE 0x00020000
-#define XNC_F_VERBOSE   0x00010000
-
-#define XNC_HASH_SIZE   32 // bytes
-#define XNC_SALT_SIZE   32 // bytes
-#define XNC_MAX_PASSWD  64 // char
-#define XNC_CHAR_SET    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+-_*/:;@[]()<>~={}!#$%&'"
-#define XNC_BUF_SIZE    16777216 //16MB
-
-#define XNC_STRECH_TIMES 1000000
-#define XNC_SEED_STATE 0xC0DECAFE // ストリームに混ぜる定数 state用
-#define XNC_SEED_KS    0x00C0FFEE // ストリームに混ぜる定数 ks用
-
-#ifdef _WIN32
-#include <windows.h>
-#include <bcrypt.h>
-#define MAX_PATH_LEN MAX_PATH
-#define fseek64 _fseeki64
-#define ftell64 _ftelli64
-#define xnc_be64( x ) _byteswap_uint64( x )
-#define xnc_be32( x ) _byteswap_ulong( x )
-#else
-// そのうち
-#define MAX_PATH_LEN PATH_MAX
-#define fseek64 fseeko
-#define ftell64 ftello
-#define xnc_be64( x ) htobe64( x )
-#define xnc_be32( x ) htobe32( x )
-#endif
-
-#if ( XNC_BUF_SIZE % 32 ) != 0
-#error "XNC_BUF_SIZE must be a multiple of 32"
-#endif
-
-enum XncRunMode {
-    XNC_AUTO = 0,
-    XNC_DECODE,
-    XNC_ENCODE,
-};
-
-enum XncAlgorithm {
-    XNC_SIMPLE_XOR = 0,
-    XNC_SEED_XOR
-};
-
-struct XncBCryptPvd{
-    BCRYPT_ALG_HANDLE h_alg;
-    PUCHAR hashobj;
-    DWORD hashobj_size;
-};
-
-struct XncSimpleXor {
-    unsigned char salt[XNC_SALT_SIZE];
-    unsigned char hash[XNC_HASH_SIZE];
-};
-
-struct XncSeedXor{
-    unsigned char state[XNC_HASH_SIZE];
-    uint64_t cnt;
-};
-struct XncSeedXorMsg{
-    uint32_t label_be;
-    uint64_t cnt_be;
-} __attribute__((packed));
-
-static struct {
-    enum XncRunMode mode;
-    enum XncAlgorithm algo;
-    uint32_t flags;
-    char *mode_str;
-    char *ext;
-    char *outdir;
-    char *passwd;
-} xnc;
-
-struct {
-    struct XncBCryptPvd sha256;
-    struct XncBCryptPvd hmac_sha256;
-} st_bcpvd;
-
-static struct {
-    char path[MAX_PATH_LEN];
-    char  dir[MAX_PATH_LEN];
-    char file[MAX_PATH_LEN];
-} st_path;
-
-typedef int (*XncConvAlgo)( unsigned char*, size_t, void* );
 
 static unsigned char st_xnc_buffer[XNC_BUF_SIZE];
 
-void _info( FILE *stream, const char *format, va_list ap )
+int simple_xor( struct XncContext *xnc, FILE *src, uint64_t src_size, FILE *dst );
+int seed_xor( struct XncContext *xnc, FILE *src, uint64_t src_size, FILE *dst );
+
+void _info( FILE *stream, const char *format, ... )
 {
+    va_list ap;
+    va_start( ap, format );
     vfprintf( stream, format, ap );
+    va_end( ap );
     fputc( '\n', stream );
 }
 
-void info( const char *format, ... )
-{
-    if( ! ( xnc.flags & XNC_F_VERBOSE ) ) return;
 
-    va_list ap;
-    va_start( ap, format );
-    _info( stdout, format, ap );
-    va_end( ap );
-}
-
-void einfo( const char *format, ... )
+void _dumpbin( const char *label, const char *fmt, const unsigned char *bytes, size_t len )
 {
-    va_list ap;
-    va_start( ap, format );
-    _info( stderr, format, ap );
-    va_end( ap );
+    if( label ) printf( "%s: ", label );
+    for( int i = 0; i < len; i++ ){
+        printf( "%c", bytes[i] );
+    }
+    fputc( '\n' ,stdout );
 }
 
 // パスをディレクトリとファイル名に分けて正規化
-int get_dir_and_name_by_path( const char *src, char *dst_dir, char *dst_name, size_t max_len )
+static int get_dir_and_name_by_path( const char *src, char *dst_dir, char *dst_name, size_t max_len )
 {
     char buf[MAX_PATH_LEN], *dst, *name = NULL;
     size_t cnt = 0;
@@ -178,22 +78,22 @@ int get_dir_and_name_by_path( const char *src, char *dst_dir, char *dst_name, si
     return 1;
 }
 
-void hashgen_init()
+static void hashgen_init( struct XncContext *xnc )
 {
     DWORD result = 0;
     NTSTATUS rv = 0;
 
-    rv |= BCryptOpenAlgorithmProvider( &(st_bcpvd.sha256.h_alg), BCRYPT_SHA256_ALGORITHM, NULL, 0 );
-    rv |= BCryptGetProperty( st_bcpvd.sha256.h_alg, BCRYPT_OBJECT_LENGTH, (PUCHAR)&(st_bcpvd.sha256.hashobj_size), sizeof( DWORD ), &result, 0 );
-    st_bcpvd.sha256.hashobj = malloc( st_bcpvd.sha256.hashobj_size );
-    if( ! st_bcpvd.sha256.hashobj ){
+    rv |= BCryptOpenAlgorithmProvider( &(xnc->hash.sha256.h_alg), BCRYPT_SHA256_ALGORITHM, NULL, 0 );
+    rv |= BCryptGetProperty( xnc->hash.sha256.h_alg, BCRYPT_OBJECT_LENGTH, (PUCHAR)&(xnc->hash.sha256.hashobj_size), sizeof( DWORD ), &result, 0 );
+    xnc->hash.sha256.hashobj = malloc( xnc->hash.sha256.hashobj_size );
+    if( ! xnc->hash.sha256.hashobj ){
         rv |= 1;
     }
 
-    rv |= BCryptOpenAlgorithmProvider( &(st_bcpvd.hmac_sha256.h_alg), BCRYPT_SHA256_ALGORITHM, NULL, BCRYPT_ALG_HANDLE_HMAC_FLAG );
-    rv |= BCryptGetProperty( st_bcpvd.hmac_sha256.h_alg, BCRYPT_OBJECT_LENGTH, (PUCHAR)&(st_bcpvd.hmac_sha256.hashobj_size), sizeof( DWORD ), &result, 0 );
-    st_bcpvd.hmac_sha256.hashobj = malloc( st_bcpvd.hmac_sha256.hashobj_size );
-    if( ! st_bcpvd.hmac_sha256.hashobj ){
+    rv |= BCryptOpenAlgorithmProvider( &(xnc->hash.hmac_sha256.h_alg), BCRYPT_SHA256_ALGORITHM, NULL, BCRYPT_ALG_HANDLE_HMAC_FLAG );
+    rv |= BCryptGetProperty( xnc->hash.hmac_sha256.h_alg, BCRYPT_OBJECT_LENGTH, (PUCHAR)&(xnc->hash.hmac_sha256.hashobj_size), sizeof( DWORD ), &result, 0 );
+    xnc->hash.hmac_sha256.hashobj = malloc( xnc->hash.hmac_sha256.hashobj_size );
+    if( ! xnc->hash.hmac_sha256.hashobj ){
         rv |= 1;
     } 
 
@@ -203,9 +103,19 @@ void hashgen_init()
     }
 }
 
+static void hashgen_destroy( struct XncContext *xnc )
+{
+    // initは失敗するとexit()するのでここにくるなら初期化できているはず
+    BCryptCloseAlgorithmProvider( xnc->hash.sha256.h_alg, 0 );
+    free( xnc->hash.sha256.hashobj );
+
+    BCryptCloseAlgorithmProvider( xnc->hash.hmac_sha256.h_alg, 0 );
+    free( xnc->hash.hmac_sha256.hashobj );
+
+    memset( &xnc->hash, 0, sizeof( xnc->hash ) );
+}
+
 // 終端にNULLを書きこまない
-#define sha256( msg, len, dst ) _sha256( msg, len, NULL, 0, dst, &(st_bcpvd.sha256) )
-#define sha256hmac( msg, msg_len, key, key_len, dst ) _sha256( msg, msg_len, key, key_len, dst, &(st_bcpvd.hmac_sha256) )
 void _sha256( const unsigned char *msg, DWORD msg_len, unsigned char *key, DWORD key_len, unsigned char *dst, struct XncBCryptPvd *pvd )
 {
     BCRYPT_HASH_HANDLE h_hash = NULL;
@@ -224,20 +134,8 @@ void _sha256( const unsigned char *msg, DWORD msg_len, unsigned char *key, DWORD
     }
 }
 
-void hashgen_destroy()
-{
-    // initは失敗するとexit()するのでここにくるなら初期化できているはず
-    BCryptCloseAlgorithmProvider( st_bcpvd.sha256.h_alg, 0 );
-    free( st_bcpvd.sha256.hashobj );
-
-    BCryptCloseAlgorithmProvider( st_bcpvd.hmac_sha256.h_alg, 0 );
-    free( st_bcpvd.hmac_sha256.hashobj );
-
-    memset( &st_bcpvd, 0, sizeof( st_bcpvd ) );
-}
-
 // 終端にNULLを書きこまない
-void keygen( unsigned char *buf, size_t len )
+static void keygen( unsigned char *buf, size_t len )
 {
     const char *charset = XNC_CHAR_SET;
     int cnum = strlen( charset );
@@ -247,29 +145,7 @@ void keygen( unsigned char *buf, size_t len )
     }
 }
 
-void info_key( const char *label, const unsigned char *hash, size_t len )
-{
-    if( ! ( xnc.flags & XNC_F_VERBOSE ) ) return;
-
-    if( label ) printf( "%s: ", label );
-    for( int i = 0; i < len; i++ ){
-        printf( "%c", hash[i] );
-    }
-    printf( "\n" );
-}
-
-void info_hash( const char *label, const unsigned char *hash, size_t len )
-{
-    if( ! ( xnc.flags & XNC_F_VERBOSE ) ) return;
-
-    if( label ) printf( "%s: ", label );
-    for( int i = 0; i < len; i++ ){
-        printf( "%02x", hash[i] );
-    }
-    printf( "\n" );
-}
-
-int xor_conv( FILE *src, FILE *dst, uint64_t fsize, XncConvAlgo ca, void *ctx )
+static int xor_conv( struct XncContext *xnc, FILE *src, uint64_t fsize, FILE *dst, struct XncAlgoParams *p )
 {
     unsigned char *buf = st_xnc_buffer;
     uint64_t progress = 0;
@@ -280,8 +156,8 @@ int xor_conv( FILE *src, FILE *dst, uint64_t fsize, XncConvAlgo ca, void *ctx )
     fseek64( dst, 0, SEEK_SET );
 
     while( progress < fsize ){
-        if( xnc.flags & XNC_F_VERBOSE && ( clock_now = clock() ) - clock_last_notice >= CLOCKS_PER_SEC ){
-            printf( "\rProgress: %3d%% [%zu / %zu bytes]", (int)( progress * 100 / fsize ), progress, fsize );
+        if( xnc->flags & XNC_F_VERBOSE && ( clock_now = clock() ) - clock_last_notice >= CLOCKS_PER_SEC ){
+            printf( "\rProgress: %3d%% [%" PRIu64 " / %" PRIu64 " bytes]", (int)( progress * 100 / fsize ), progress, fsize );
             fflush( stdout );
             clock_last_notice = clock_now;
         }
@@ -298,7 +174,7 @@ int xor_conv( FILE *src, FILE *dst, uint64_t fsize, XncConvAlgo ca, void *ctx )
         }
 
         // 必ず32バイト境界で読みだしたことにする
-        ca( buf, ( read_bytes + 31 ) / 32, ctx );
+        p->fn_xor( xnc, buf, ( read_bytes + 31 ) / 32, p->ctx );
 
         // 実際の読み出しサイズのみ書きこむ
         if( fwrite( buf, sizeof( char ), read_bytes, dst ) != read_bytes ){
@@ -308,8 +184,8 @@ int xor_conv( FILE *src, FILE *dst, uint64_t fsize, XncConvAlgo ca, void *ctx )
         progress += read_bytes;
     }
 
-    if( xnc.flags & XNC_F_VERBOSE ){
-        printf( "\rProgress: 100%% [%zu / %zu bytes]", progress, fsize );
+    if( xnc->flags & XNC_F_VERBOSE ){
+        printf( "\rProgress: 100%% [%" PRIu64 " / %" PRIu64 " bytes]", progress, fsize );
         fflush( stdout );
     }
     printf( "\n" );
@@ -317,61 +193,63 @@ int xor_conv( FILE *src, FILE *dst, uint64_t fsize, XncConvAlgo ca, void *ctx )
     return 1;
 }
 
-int parse_args( int argc, char *argv[] )
+static int parse_args( struct XncContext *xnc, int argc, char *argv[] )
 {
     int mdchk = 0, opt;
     while( ( opt = getopt( argc, argv, "edfvo:x:a:p:" ) ) != -1 ){
         switch( opt ){
             case 'd':
-                xnc.mode = XNC_DECODE;
+                xnc->mode = XNC_DECODE;
                 mdchk++; //エラーチェック用
                 break;
             case 'e':
-                xnc.mode = XNC_ENCODE;
+                xnc->mode = XNC_ENCODE;
                 mdchk++; //エラーチェック用
                 break;
             case 'a':
                 for( int i = 0; optarg[i] != '\0'; i++ ) optarg[i] = tolower( optarg[i] );
                 if( strcmp( optarg, "xor" ) == 0 ){
-                    xnc.algo = XNC_SIMPLE_XOR;
+                    xnc->algo.func = simple_xor;
                 } else if( strcmp( optarg, "seed-xor" ) == 0 ){
-                    xnc.algo = XNC_SEED_XOR;
+                    xnc->algo.func = seed_xor;
                 } else{
                     einfo( "Invalid algorithm specified.\n" );
                     return -1;
                 }
-                xnc.mode_str = optarg;
+                xnc->algo.name = optarg;
                 break;
-            case 'p': xnc.passwd = optarg;          break;
-            case 'o': xnc.outdir = optarg;          break;
-            case 'f': xnc.flags |= XNC_F_OVERWRITE; break;
-            case 'v': xnc.flags |= XNC_F_VERBOSE;   break;
+            case 'p': xnc->passwd = optarg;          break;
+            case 'o': xnc->outdir = optarg;          break;
+            case 'f': xnc->flags |= XNC_F_OVERWRITE; break;
+            case 'v': xnc->flags |= XNC_F_VERBOSE;   break;
             case 'x':
-                if( optarg[0] != '\0' ) xnc.ext = optarg;
+                if( optarg[0] != '\0' ) xnc->ext = optarg;
                 break;
             default:
-                einfo( "Invalid argument: %c\n", opt );
+                einfof( "Invalid argument: %c\n", opt );
                 return -1;
         }
     }
 
-    if( mdchk > 1 ){
+    if( mdchk == 0 ){
+        xnc->flags |= XNC_F_AUTODETECT;
+    } else if( mdchk > 1 ){
         einfo( "Multiple modes specified.\n" );
         return -1;
     }
 
-    if( xnc.passwd && xnc.passwd[0] == '\0' ) xnc.passwd = NULL;
+    if( xnc->passwd && xnc->passwd[0] == '\0' ) xnc->passwd = NULL;
 
     if( argc < ( optind + 1 ) ){
-        einfo( "Xor deNCrypter %s", XNC_VERSION );
-        einfo( "Usage: %s [-edfv] [-a xor|seed-xor] [-p passwd] [-o dir] [-x ext] file [file ...]", XNC_NAME );
+        einfof( "Xor deNCrypter %s", XNC_VERSION );
+        einfof( "Usage: %s [-edfv] [-a xor|seed-xor] [-p passwd] [-o dir] [-x ext] file [file ...]", XNC_NAME );
         return -1;
     }
 
     return optind;
 }
 
-int _algo_simple_xor( unsigned char *restrict buf, size_t blocks, void *ctx )
+int _algo_simple_xor( struct XncContext *xnc, unsigned char *restrict buf, size_t blocks, void *ctx )
 {
     struct XncSimpleXor *c = (struct XncSimpleXor *)ctx;
 
@@ -385,7 +263,7 @@ int _algo_simple_xor( unsigned char *restrict buf, size_t blocks, void *ctx )
     return 1;
 }
 
-int _algo_seed_xor( unsigned char *restrict buf, size_t blocks, void *ctx )
+int _algo_seed_xor( struct XncContext *xnc, unsigned char *restrict buf, size_t blocks, void *ctx )
 {
     struct XncSeedXor *c = (struct XncSeedXor *)ctx;
     unsigned char ks[XNC_HASH_SIZE];
@@ -394,7 +272,7 @@ int _algo_seed_xor( unsigned char *restrict buf, size_t blocks, void *ctx )
     for( size_t i = 0; i < blocks; i++ ){
         msg.label_be = xnc_be32( XNC_SEED_KS );
         msg.cnt_be   = xnc_be64( c->cnt );
-        sha256hmac( (unsigned char *)&msg, sizeof( msg ), c->state, sizeof( c->state ), ks );
+        sha256hmac( xnc, (unsigned char *)&msg, sizeof( msg ), c->state, sizeof( c->state ), ks );
 
         for( int j = 0; j < XNC_HASH_SIZE; j++ ){
             buf[j] ^= ks[j];
@@ -404,20 +282,24 @@ int _algo_seed_xor( unsigned char *restrict buf, size_t blocks, void *ctx )
         c->cnt++;
         msg.label_be = xnc_be32( XNC_SEED_STATE );
         msg.cnt_be   = xnc_be64( c->cnt );
-        sha256hmac( (unsigned char *)&msg, sizeof( msg ), c->state, sizeof( c->state ), c->state ); 
+        sha256hmac( xnc, (unsigned char *)&msg, sizeof( msg ), c->state, sizeof( c->state ), c->state ); 
     }
     return 1;
 }
 
-int simple_xor( FILE *src, FILE *dst, enum XncRunMode mode, size_t src_size )
+int simple_xor( struct XncContext *xnc, FILE *src, uint64_t src_size, FILE *dst )
 {
-    struct XncSimpleXor ctx;
+    struct XncAlgoParams p;
+    struct XncSimpleXor c;
     unsigned char hash[XNC_HASH_SIZE];
 
-    switch( mode ){
+    p.fn_xor = _algo_simple_xor;
+    p.ctx = &c;
+
+    switch( xnc->mode ){
         case XNC_ENCODE:
-            keygen( ctx.salt, sizeof( ctx.salt ) );
-            sha256( ctx.salt, sizeof( ctx.salt ), hash );
+            keygen( c.salt, sizeof( c.salt ) );
+            sha256( xnc, c.salt, sizeof( c.salt ), hash );
             break;
         case XNC_DECODE:
             fseek64( src, -( sizeof( hash ) ), SEEK_END );
@@ -430,8 +312,8 @@ int simple_xor( FILE *src, FILE *dst, enum XncRunMode mode, size_t src_size )
 
     // パスワードが設定されている場合はキーとパスワードを合わせて
     // もう一度ハッシュ化したものを最終的なキーにする
-    if( xnc.passwd ){
-        size_t pass_len = strlen( xnc.passwd );
+    if( xnc->passwd ){
+        size_t pass_len = strlen( xnc->passwd );
 
         struct {
             char hash[XNC_HASH_SIZE];
@@ -439,33 +321,36 @@ int simple_xor( FILE *src, FILE *dst, enum XncRunMode mode, size_t src_size )
         } __attribute__((packed)) seed;
 
         memcpy( (void *)seed.hash, hash, sizeof( seed.hash ) );
-        memcpy( (void *)seed.passwd, xnc.passwd, pass_len );
-        sha256( (unsigned char *)&seed, sizeof( seed.hash ) + pass_len, ctx.hash );
+        memcpy( (void *)seed.passwd, xnc->passwd, pass_len );
+        sha256( xnc, (unsigned char *)&seed, sizeof( seed.hash ) + pass_len, c.hash );
     } else{
-        memcpy( ctx.hash, hash, sizeof( hash ) );
+        memcpy( c.hash, hash, sizeof( hash ) );
     }
 
-    info_hash( "Hash", (unsigned char *)ctx.hash, sizeof( ctx.hash ) );
+    dumphash( xnc, "Hash", (unsigned char *)c.hash, sizeof( c.hash ) );
     
     // 変換
-    xor_conv( src, dst, src_size, _algo_simple_xor, &ctx );
+    xor_conv( xnc, src, src_size, dst, &p );
 
-    if( mode == XNC_ENCODE ){
-        info( "Added decode key.");
+    if( xnc->mode == XNC_ENCODE ){
+        info( xnc, "Added decode key.");
         fwrite( hash, sizeof( char ), sizeof( hash ), dst );
     }
 
     return 1;
 }
 
-int seed_xor( FILE *src, FILE *dst, enum XncRunMode mode, size_t src_size )
+int seed_xor( struct XncContext *xnc, FILE *src, uint64_t src_size, FILE *dst )
 {
-    struct XncSeedXor ctx;
+    struct XncAlgoParams p;
+    struct XncSeedXor c;
     unsigned char salt[XNC_SALT_SIZE];
 
-    ctx.cnt = 0;
+    p.fn_xor = _algo_seed_xor;
+    p.ctx = &c;
+    c.cnt = 0;
 
-    switch( mode ){
+    switch( xnc->mode ){
         case XNC_ENCODE:
             keygen( salt, sizeof( salt ) );
             break;
@@ -500,14 +385,15 @@ int seed_xor( FILE *src, FILE *dst, enum XncRunMode mode, size_t src_size )
         memcpy( strech.state, &label_be, sizeof( label_be ) ); // 代わりにlabelを挿入
         strech.i_be = xnc_be32( i );
         memcpy( strech.key, salt, sizeof( salt ) );
-        if( xnc.passwd ){
-            pass_len = strlen( xnc.passwd );
-            memcpy( strech.passwd, xnc.passwd, pass_len );
+        if( xnc->passwd ){
+            pass_len = strlen( xnc->passwd );
+            memcpy( strech.passwd, xnc->passwd, pass_len );
         }
-        sha256( (unsigned char *)&strech, ( sizeof( strech ) - sizeof( strech.passwd ) ) + pass_len, strech.state );
+        sha256( xnc, (unsigned char *)&strech, ( sizeof( strech ) - sizeof( strech.passwd ) ) + pass_len, strech.state );
         for( ; i < XNC_STRECH_TIMES; i++ ){
             strech.i_be = xnc_be32( i );
             sha256hmac(
+                xnc,
                 (unsigned char *)&strech,
                 sizeof( strech ) - sizeof( strech.passwd ) + pass_len,
                 strech.state,
@@ -517,15 +403,15 @@ int seed_xor( FILE *src, FILE *dst, enum XncRunMode mode, size_t src_size )
         }
 
         msg.label_be = label_be;
-        msg.cnt_be = xnc_be64( ctx.cnt );
-        sha256hmac( (unsigned char *)&msg, sizeof( msg ), strech.state, sizeof( strech.state ), ctx.state );
+        msg.cnt_be = xnc_be64( c.cnt );
+        sha256hmac( xnc, (unsigned char *)&msg, sizeof( msg ), strech.state, sizeof( strech.state ), c.state );
     }
 
-    info_key( "Key", (unsigned char *)salt, sizeof( salt ) );
-    xor_conv( src, dst, src_size, _algo_seed_xor, &ctx );
+    dumpkey( xnc, "Key", (unsigned char *)salt, sizeof( salt ) );
+    xor_conv( xnc, src, src_size, dst, &p );
 
-    if( mode == XNC_ENCODE ){
-        info( "Added decode key.");
+    if( xnc->mode == XNC_ENCODE ){
+        info( xnc, "Added decode key.");
         fwrite( salt, sizeof( char ), sizeof( salt ), dst );
     }
 
@@ -535,66 +421,62 @@ int seed_xor( FILE *src, FILE *dst, enum XncRunMode mode, size_t src_size )
 int main( int argc, char *argv[] )
 {
     int rv = 0, args_offset, store_len;
-    enum XncRunMode mode;
-    char *dot, *src_path, *outdir, dst_path[MAX_PATH_LEN];
+    char src_path[MAX_PATH_LEN], dst_path[MAX_PATH_LEN];
+    char path_dir[MAX_PATH_LEN], path_file[MAX_PATH_LEN];
+    char *dot, *outdir;
     FILE *src = NULL, *dst = NULL;
     int64_t src_size;
 
-    xnc.algo   = XNC_SIMPLE_XOR;
-    xnc.flags  = 0;
-    xnc.ext    = XNC_DEFAULT_EXT;
-    xnc.passwd = NULL;
-    xnc.outdir = NULL;
+    struct XncContext xnc = { 0 };
+    
+    hashgen_init( &xnc );
 
-    args_offset = parse_args( argc, argv );
+    args_offset = parse_args( &xnc, argc, argv );
     if( args_offset < 0 ) return 1;
 
-    hashgen_init();
+    xnc.buf = st_xnc_buffer;
 
-    info( "-----------------------------------------------" );
-    info( "XOR Algorithm: %s", xnc.mode_str );
+    info( &xnc, "-----------------------------------------------" );
+    infof( &xnc, "XOR Algorithm: %s", xnc.algo.name );
 
     srand( (unsigned int)time( NULL ) ^ ( (unsigned int)clock() << 16 ) );
 
     for( int offset = args_offset; offset < argc ; offset++ ){
-        if( ! get_dir_and_name_by_path( argv[offset], st_path.dir, st_path.file, MAX_PATH_LEN ) ){
-            einfo( "Failed to parse source path strings: %s", argv[offset] );
+        if( ! get_dir_and_name_by_path( argv[offset], path_dir, path_file, MAX_PATH_LEN ) ){
+            einfof( "Failed to parse source path strings: %s", argv[offset] );
             goto NEXT;
         }
 
-        store_len = snprintf( st_path.path, MAX_PATH_LEN, "%s/%s", st_path.dir, st_path.file );
+        if( path_file[0] == '\0' ){
+            einfo( "Empty source file name specified." );
+            goto NEXT;
+        }
+
+        store_len = snprintf( src_path, MAX_PATH_LEN, "%s/%s", path_dir, path_file );
         if( store_len >= MAX_PATH_LEN ){
             einfo( "Source file path is too long." );
             goto NEXT;
         }
 
-        if( st_path.file[0] == '\0' ){
-            einfo( "Empty source file name specified." );
-            goto NEXT;
-        }
+        outdir = xnc.outdir ? xnc.outdir : path_dir;
 
-        src_path = st_path.path;
-        outdir   = xnc.outdir ? xnc.outdir : st_path.dir;
-
-        info( "-----------------------------------------------" );
-        info( "Source file: %s/%s", st_path.dir, st_path.file );
+        info( &xnc, "-----------------------------------------------" );
+        infof( &xnc, "Source file: %s", src_path );
 
         // 末尾が ".xnc" (xnc.ext) だったら'.'の位置を保存
-        dot = strrchr( st_path.file, '.' );
+        dot = strrchr( path_file, '.' );
         if( dot && strcasecmp( dot + 1, xnc.ext ) != 0 ){
             dot = NULL;
         }
 
         // 動作モードを確定
-        if( xnc.mode == XNC_AUTO ){
-            mode = dot ? XNC_DECODE : XNC_ENCODE;
-        } else{
-            mode = xnc.mode;
+        if( xnc.flags & XNC_F_AUTODETECT ){
+            xnc.mode = dot ? XNC_DECODE : XNC_ENCODE;
         }
 
         src = fopen( src_path, "rb" );
         if( ! src ){
-            einfo( "Failed to open source file: %s", src_path );
+            einfof( "Failed to open source file: %s", src_path );
             goto NEXT;
         }
 
@@ -603,21 +485,21 @@ int main( int argc, char *argv[] )
         src_size = ftell64( src );
 
         // 処理に必要な出力パスを取得
-        if( mode == XNC_ENCODE ){
-            store_len = snprintf( dst_path, MAX_PATH_LEN, "%s/%s.%s", outdir, st_path.file, xnc.ext );
+        if( xnc.mode == XNC_ENCODE ){
+            store_len = snprintf( dst_path, MAX_PATH_LEN, "%s/%s.%s", outdir, path_file, xnc.ext );
             if( store_len >= MAX_PATH_LEN ){
                 einfo( "Filename too long." );
                 goto NEXT;
             }
-        } else if( mode == XNC_DECODE ){
+        } else if( xnc.mode == XNC_DECODE ){
             if( dot ) *dot = '\0';
 
             if( src_size < XNC_HASH_SIZE ){
-                info( "File size is too small. skipped.");
+                einfo( "File size is too small. skipped.");
                 goto NEXT;
             }
 
-            store_len = snprintf( dst_path, MAX_PATH_LEN, "%s/%s", outdir, st_path.file );
+            store_len = snprintf( dst_path, MAX_PATH_LEN, "%s/%s", outdir, path_file );
              if( store_len >= MAX_PATH_LEN ){
                 einfo( "Filename too long." );
                 goto NEXT;
@@ -633,24 +515,21 @@ int main( int argc, char *argv[] )
             goto NEXT;
         }
 
-        info( "Output file: %s", dst_path );
+        infof( &xnc, "Output file: %s", dst_path );
         if( access( dst_path, F_OK ) == 0 && ! ( xnc.flags & XNC_F_OVERWRITE ) ){
-            einfo( "Output path is already exists: %s", dst_path );
+            einfof( "Output path is already exists: %s", dst_path );
             goto NEXT;
         }
 
         dst = fopen( dst_path, "wb" );
         if( ! dst ){
-            einfo( "Failed to open output file: %s", dst_path );
+            einfof( "Failed to open output file: %s", dst_path );
             goto NEXT;
         }
 
         // 変換
-        info( "Processing..." );
-        switch( xnc.algo ){
-            case XNC_SIMPLE_XOR: simple_xor( src, dst, mode, src_size ); break;
-            case XNC_SEED_XOR:   seed_xor( src, dst, mode, src_size );   break;
-        }
+        info( &xnc, "Processing..." );
+        xnc.algo.func( &xnc, src, src_size, dst );
 
         if( ferror( src ) || ferror( dst ) ){
             einfo( "Some error occured. skipped.");
@@ -669,7 +548,7 @@ int main( int argc, char *argv[] )
             if( src ) fclose( src );
     }
 
-    hashgen_destroy();
+    hashgen_destroy( &xnc );
 
     return rv;
 }
