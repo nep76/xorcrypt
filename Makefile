@@ -1,8 +1,9 @@
 CC      = gcc
-CFLAGS  = -std=c99 -O3 -s -mavx2 -fopt-info-vec-optimized -Wall
+CFLAGS  = -std=c99 -O3 -s -mavx2 -fopt-info-vec-optimized -Wall 
 LDFLAGS = -lbcrypt
 
-OBJS = main.o
+SRCS = $(wildcard *.c)
+OBJS = $(SRCS:.c=.o)
 
 TARGET  = xorcrypt
 
