@@ -1,4 +1,4 @@
-name: Build
+name: Build-Ubuntu
 
 on:
   push:
@@ -16,3 +16,9 @@ jobs:
 
       - name: Build
         run: make
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: xorcrypt
+          path: xorcrypt
