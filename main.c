@@ -210,12 +210,8 @@ static int parse_args( struct XncContext *xnc, int argc, char *argv[] )
         return -1;
     }
 
-    // 引数が足りなければ使用方法表示
-    if( argc < ( optind + 1 ) ){
-        einfof( "Xor deNCrypter %s", XNC_VERSION );
-        einfof( "Usage: %s [-edfv] [-a xor|seed-xor] [-p passwd] [-o dir] [-x ext] file [file ...]", XNC_NAME );
-        return -1;
-    }
+    // 引数が足りなければ失敗
+    if( argc < ( optind + 1 ) ) return -1;
 
     return optind;
 }
@@ -234,7 +230,17 @@ int main( int argc, char *argv[] )
     hash_init( &xnc );
 
     args_offset = parse_args( &xnc, argc, argv );
-    if( args_offset < 0 ) return 1;
+    if( args_offset < 0 ){
+        char *name;
+        if( _get_dir_and_name_by_path( argv[0], path_dir, path_file, MAX_PATH_LEN ) ){
+            name = path_file;
+        } else{
+            name = XNC_NAME;
+        }
+        einfof( "Xor deNCrypter %s", XNC_VERSION );
+        einfof( "Usage: %s [-edfv] [-a xor|seed-xor] [-p passwd] [-o dir] [-x ext] file [file ...]", name );
+        return 1;
+    }
 
     xnc.buf = st_xnc_buffer;
 

@@ -1,10 +1,13 @@
-CC      = gcc
+CC      ?= gcc
 CFLAGS  ?= -O3 -march=x86-64 -mtune=generic -Wall -Wextra -Werror
 LDFLAGS ?= -s
 LIBS    =
 
+SUFFIX =
+
 ifdef WITH_AVX2
 	CFLAGS += -mavx2 -mbmi -mbmi2 -mfma -fopt-info-vec-optimized
+	SUFFIX = -avx2
 endif
 
 ifeq ($(OS), Windows_NT)
@@ -16,17 +19,28 @@ endif
 SRCS = $(wildcard *.c)
 OBJS = $(SRCS:.c=.o)
 
-TARGET  = xorcrypt
+TARGET  = xorcrypt$(SUFFIX)
 
 all: $(TARGET)
 
 $(TARGET): $(OBJS)
-	$(CC) $(OBJS) -o $(TARGET) $(LDFLAGS) $(LIBS)
+	$(CC) $(LDFLAGS) $(OBJS) -o $(TARGET) $(LIBS)
 
 clean:
 	rm -f $(OBJS)
 
-distclean: clean
+allclean: clean
 	rm -f $(TARGET) $(TARGET).exe
 
 rebuild: clean all
+
+dist:
+	$(MAKE) clean
+	$(MAKE) all
+	$(MAKE) clean
+	$(MAKE) WITH_AVX2=yes all
+	$(MAKE) clean
+
+distclean:
+	$(MAKE) allclean
+	$(MAKE) WITH_AVX2=yes allclean
