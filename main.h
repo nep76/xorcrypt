@@ -74,6 +74,7 @@ struct XncHashPvd {
 };
 #endif
 
+
 struct XncContext {
     struct XncAlgo algo;
 #ifdef _WIN32
