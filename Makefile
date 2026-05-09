@@ -48,16 +48,15 @@ allclean:
 	$(MAKE) objclean
 	$(MAKE) binclean
 	$(MAKE) WITH_AVX2=yes objclean
-	$(MAKE) WITH_AVX2=ues binclean
+	$(MAKE) WITH_AVX2=yes binclean
 
 rebuild: objclean all
 
-dist:
-	$(MAKE) clean
+dist: allclean
 	$(MAKE) all
-	$(MAKE) objclean
+	$(MAKE) clean
 	$(MAKE) WITH_AVX2=yes all
-	$(MAKE) WITH_AVX2=yes objclean
+	$(MAKE) WITH_AVX2=yes clean
 
 distclean: allclean
 
