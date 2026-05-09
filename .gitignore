@@ -1,8 +1,10 @@
+MAKETEST.*
 *.exe
 *.o
 *.xnc
 *.jpg
 *.kra
+
 
 .vscode/
 xorcrypt.code-workspace

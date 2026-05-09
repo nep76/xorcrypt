@@ -1,0 +1,52 @@
+name: Build-musl
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_branch:
+        description: "Switch branch"
+        required: true
+        default: "wip"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        target: [glibc, musl]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.target_branch }}
+      
+      - name: Show branch
+        run: echo "Switch ${{ github.event.inputs.target_branch }}"
+
+      - name: Build with glibc
+        if: matrix.target == 'glibc'
+        run: |
+          sudo apt update
+          sudo apt install -y build-essential libssl-dev
+          make distclean dist disttest
+
+      - name: Build with musl inside Alpine
+        if: matrix.target == 'musl'
+        run: |
+          docker run --rm -v ${{ github.workspace }}:/src -w /src alpine:latest \
+            sh -c "
+              apk add --no-cache build-base openssl-dev &&
+              make distclean dist disttest
+            "
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.target }}
+          path: |
+            ./xorcrypt
+            ./xorcrypt-avx2
+            ./README.md
+            ./LICENSE
