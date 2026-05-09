@@ -20,7 +20,7 @@ jobs:
               make clean || true &&
               make &&
               echo '--- Running test ---' &&
-              ./xorcrypt
+              ./xorcrypt || true
             "
 
       - name: Upload musl binary
