@@ -61,6 +61,7 @@ struct XncAlgo {
     XncAlgoFunc func;
 };
 
+#ifdef _WIN32
 struct XncBCryptPvd{
     BCRYPT_ALG_HANDLE h_alg;
     PUCHAR hashobj;
@@ -71,10 +72,13 @@ struct XncHashPvd {
     struct XncBCryptPvd sha256;
     struct XncBCryptPvd hmac_sha256;
 };
+#endif
 
 struct XncContext {
     struct XncAlgo algo;
+#ifdef _WIN32
     struct XncHashPvd hash;
+#endif
     enum XncRunMode mode;
     uint32_t flags;
     char *ext;
