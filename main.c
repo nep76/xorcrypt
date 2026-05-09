@@ -6,6 +6,12 @@
 #include <inttypes.h>
 #include <getopt.h>
 
+#ifdef _WIN32
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
+
 #include "hash.h"
 #include "info.h"
 
