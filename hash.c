@@ -82,10 +82,13 @@ void _hash_sha256( unsigned char *msg,
                   size_t len,
                   unsigned char *output )
 {
-    SHA256_CTX ctx;
-    SHA256_Init( &ctx );
-    SHA256_Update( &ctx, msg, len );
-    SHA256_Final( output, &ctx );
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+
+    EVP_DigestInit_ex( ctx, EVP_sha256(), NULL );
+    EVP_DigestUpdate( ctx, msg, len );
+    EVP_DigestFinal_ex( ctx, output, NULL );
+
+    EVP_MD_CTX_free( ctx );
 }
 
 void _hash_sha256hmac( unsigned char *msg,
