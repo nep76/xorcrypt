@@ -2,6 +2,7 @@ name: Build-musl
 
 on:
   push:
+  pull_request:
 
 jobs:
   build:
