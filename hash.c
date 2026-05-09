@@ -7,9 +7,9 @@
 #include <openssl/hmac.h>
 #endif
 
+#ifdef _WIN32
 void hash_init( struct XncContext *xnc )
 {
-#ifdef _WIN32
     DWORD result = 0;
     NTSTATUS rv = 0;
 
@@ -31,14 +31,10 @@ void hash_init( struct XncContext *xnc )
         einfo( "Failed to initialize SHA256 provider. aborting." );
         exit( 1 );
     }
-#else
-    return;
-#endif
 }
 
 void hash_destroy( struct XncContext *xnc )
 {
-#ifdef _WIN32
     // initは失敗するとexit()するのでここにくるなら初期化できているはず
     BCryptCloseAlgorithmProvider( xnc->hash.sha256.h_alg, 0 );
     free( xnc->hash.sha256.hashobj );
@@ -47,12 +43,8 @@ void hash_destroy( struct XncContext *xnc )
     free( xnc->hash.hmac_sha256.hashobj );
 
     memset( &xnc->hash, 0, sizeof( xnc->hash ) );
-#else
-    return;
-#endif
 }
 
-#ifdef _WIN32
 // 終端にNULLを書きこまない
 void _hash_sha256( const unsigned char *msg,
                    DWORD msg_len,
