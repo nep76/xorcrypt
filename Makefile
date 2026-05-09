@@ -1,6 +1,6 @@
 CC      = gcc
-CFLAGS  = -O3 -s -mavx2 -fopt-info-vec-optimized -Wall -Wextra -Werror
-LDFLAGS = 
+CFLAGS  = -O3 -mavx2 -fopt-info-vec-optimized -Wall -Wextra -Werror
+LDFLAGS = -s
 LIBS    =
 
 ifeq ($(OS), Windows_NT)
@@ -17,7 +17,7 @@ TARGET  = xorcrypt
 all: $(TARGET)
 
 $(TARGET): $(OBJS)
-	$(CC) $(OBJS) -o $(TARGET) $(LIBS)
+	$(CC) $(OBJS) -o $(TARGET) $(LDFLAGS) $(LIBS)
 
 clean:
 	rm -f $(OBJS)
