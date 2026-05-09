@@ -5,6 +5,6 @@ MAKETEST.*
 *.jpg
 *.kra
 
-
+dist/
 .vscode/
 xorcrypt.code-workspace
