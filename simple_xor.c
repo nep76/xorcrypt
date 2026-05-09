@@ -1,11 +1,15 @@
 #include "simple_xor.h"
 
+#include <string.h>
+
 static int algo_simple_xor( struct XncContext *xnc, unsigned char *restrict buf, size_t blocks, void *ctx )
 {
     struct XncSimpleXor *c = (struct XncSimpleXor *)ctx;
 
+    (void)xnc;
+
     for( size_t i = 0; i < blocks; i++ ){
-        for( int j = 0; j < sizeof( c->hash ); j++ ){
+        for( size_t j = 0; j < sizeof( c->hash ); j++ ){
             buf[j] ^= c->hash[j];
         }
         buf += sizeof( c->hash );

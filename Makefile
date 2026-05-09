@@ -1,5 +1,5 @@
 CC      = gcc
-CFLAGS  = -O3 -s -mavx2 -fopt-info-vec-optimized -Wall 
+CFLAGS  = -O3 -s -mavx2 -fopt-info-vec-optimized -Wall -Wextra -Werror
 LDFLAGS = -lbcrypt
 
 SRCS = $(wildcard *.c)

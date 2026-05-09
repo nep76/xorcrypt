@@ -1,5 +1,7 @@
 #include "seed_xor.h"
 
+#include <string.h>
+
 static int algo_seed_xor( struct XncContext *xnc, unsigned char *restrict buf, size_t blocks, void *ctx )
 {
     struct XncSeedXor *c = (struct XncSeedXor *)ctx;

@@ -12,7 +12,7 @@ void _info( FILE *stream, const char *format, ... )
 void _dumpbin( const char *label, const char *fmt, const unsigned char *bytes, size_t len )
 {
     if( label ) printf( "%s: ", label );
-    for( int i = 0; i < len; i++ ){
+    for( size_t i = 0; i < len; i++ ){
         if( i % 0x10 == 0 ) printf( "\n  " );
         printf( fmt, bytes[i] );
     }
