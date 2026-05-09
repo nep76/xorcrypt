@@ -74,12 +74,7 @@ static int _get_dir_and_name_by_path( const char *src, char *dst_dir, char *dst_
 // 終端にNULLを書きこまない
 void xnc_salt_seed_gen( unsigned char *buf, size_t len )
 {
-    const char *charset = XNC_CHAR_SET;
-    int cnum = strlen( charset );
-
-    for( int i = 0; i < len; i++ ){
-        buf[i] = charset[rand() % cnum];
-    }
+    while( len-- ) *buf = rand() & 0xFF;
 }
 
 void xnc_create_salt( struct XncContext *xnc, unsigned char *output, size_t len )

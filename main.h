@@ -13,7 +13,6 @@
 #define XNC_HASH_SIZE   32 // bytes
 #define XNC_SALT_SIZE   32 // bytes
 #define XNC_MAX_PASSWD  64 // char
-#define XNC_CHAR_SET    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+-_*/:;@[]()<>~={}!#$%&'"
 #define XNC_BUF_SIZE    16777216 //16MB
 
 #define XNC_STRECH_TIMES 1000000
