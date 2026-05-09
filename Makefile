@@ -27,7 +27,7 @@ $(TARGET): $(OBJS)
 	$(CC) $(LDFLAGS) $(OBJS) -o $(TARGET) $(LIBS)
 
 clean:
-	rm -f $(OBJS)
+	rm -f $(OBJS) MAKETEST MAKETEST.xnc
 
 allclean: clean
 	rm -f $(TARGET) $(TARGET).exe
@@ -42,7 +42,6 @@ dist:
 	$(MAKE) clean
 
 distclean:
-	rm -f MAKETEST MAKETEST.xnc
 	$(MAKE) allclean
 	$(MAKE) WITH_AVX2=yes allclean
 
