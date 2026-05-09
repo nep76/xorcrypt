@@ -85,8 +85,9 @@ struct XncContext {
 };
 
 void   xnc_salt_seed_gen( unsigned char *buf, size_t len );
-size_t xnc_read_salt( FILE *src, unsigned char *output, size_t len );
 void   xnc_create_salt( struct XncContext *xnc, unsigned char *output, size_t len );
+size_t xnc_read_salt( unsigned char *output, size_t len, FILE *fp );
+void   xnc_write_salt( const unsigned char *salt, size_t len, FILE *fp );
 int    xnc_xor_conv( struct XncContext *xnc, FILE *src, uint64_t fsize, FILE *dst, struct XncAlgoParams *p );
 
 #endif

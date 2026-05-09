@@ -84,7 +84,7 @@ int seed_xor( struct XncContext *xnc, FILE *src, uint64_t src_size, FILE *dst )
             xnc_create_salt( xnc, salt, sizeof( salt ) );
             break;
         case XNC_DECODE:
-            src_size -= xnc_read_salt( src, salt, sizeof( salt ) );
+            src_size -= xnc_read_salt( salt, sizeof( salt ), src );
             break;
     }
 
@@ -96,7 +96,7 @@ int seed_xor( struct XncContext *xnc, FILE *src, uint64_t src_size, FILE *dst )
     xnc_xor_conv( xnc, src, src_size, dst, &p );
 
     if( xnc->mode == XNC_ENCODE ){
-        fwrite( salt, 1, sizeof( salt ), dst );
+        xnc_write_salt( salt, sizeof( salt ), dst );
     }
 
     return 1;

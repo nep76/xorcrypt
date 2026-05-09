@@ -88,13 +88,13 @@ void xnc_create_salt( struct XncContext *xnc, unsigned char *output, size_t len 
     hash_sha256( xnc, output, len, output );
 }
 
-size_t xnc_read_salt( FILE *fp, unsigned char *output, size_t len )
+size_t xnc_read_salt( unsigned char *output, size_t len, FILE *fp )
 {
     fseek( fp, -( len ), SEEK_END );
     return fread( output, 1, len, fp );
 }
 
-void xnc_write_salt( FILE *fp, const unsigned char *salt, size_t len )
+void xnc_write_salt( const unsigned char *salt, size_t len, FILE *fp )
 {
     fseek( fp, 0, SEEK_END );
     fwrite( salt, 1, len, fp );
@@ -179,6 +179,7 @@ static int parse_args( struct XncContext *xnc, int argc, char *argv[] )
         }
     }
 
+    // モード選択に矛盾がないかチェック
     if( mdchk == 0 ){
         xnc->flags |= XNC_F_AUTODETECT;
     } else if( mdchk > 1 ){
@@ -186,10 +187,13 @@ static int parse_args( struct XncContext *xnc, int argc, char *argv[] )
         return -1;
     }
 
+    // 拡張子が未設定ならデフォルト値
     if( ! xnc->ext ) xnc->ext = XNC_DEFAULT_EXT;
 
+    // パスワードが空文字列ならなし
     if( xnc->passwd && xnc->passwd[0] == '\0' ) xnc->passwd = NULL;
 
+    // 変換アルゴリズムを特定
     if( ! xnc->algo.name || strcmp( xnc->algo.name, "xor" ) == 0 ){
         xnc->algo.name = "xor";
         xnc->algo.func = simple_xor;
@@ -201,6 +205,7 @@ static int parse_args( struct XncContext *xnc, int argc, char *argv[] )
         return -1;
     }
 
+    // 引数が足りなければ使用方法表示
     if( argc < ( optind + 1 ) ){
         einfof( "Xor deNCrypter %s", XNC_VERSION );
         einfof( "Usage: %s [-edfv] [-a xor|seed-xor] [-p passwd] [-o dir] [-x ext] file [file ...]", XNC_NAME );

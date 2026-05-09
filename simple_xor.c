@@ -1,6 +1,6 @@
 #include "simple_xor.h"
 
-static int _algo_simple_xor( struct XncContext *xnc, unsigned char *restrict buf, size_t blocks, void *ctx )
+static int algo_simple_xor( struct XncContext *xnc, unsigned char *restrict buf, size_t blocks, void *ctx )
 {
     struct XncSimpleXor *c = (struct XncSimpleXor *)ctx;
 
@@ -20,7 +20,7 @@ int simple_xor( struct XncContext *xnc, FILE *src, uint64_t src_size, FILE *dst 
     struct XncSimpleXor  c;
     unsigned char salt[XNC_SALT_SIZE];
 
-    p.xor = _algo_simple_xor;
+    p.xor = algo_simple_xor;
     p.ctx = &c;
 
     switch( xnc->mode ){
@@ -28,7 +28,7 @@ int simple_xor( struct XncContext *xnc, FILE *src, uint64_t src_size, FILE *dst 
             xnc_create_salt( xnc, salt, sizeof( salt ) );
             break;
         case XNC_DECODE:
-            src_size -= xnc_read_salt( src, salt, sizeof( salt ) );
+            src_size -= xnc_read_salt( salt, sizeof( salt ), src );
             break;
     }
 
@@ -55,7 +55,7 @@ int simple_xor( struct XncContext *xnc, FILE *src, uint64_t src_size, FILE *dst 
     xnc_xor_conv( xnc, src, src_size, dst, &p );
 
     if( xnc->mode == XNC_ENCODE ){
-        fwrite( salt, 1, sizeof( salt ), dst );
+        xnc_write_salt( salt, sizeof( salt ), dst );
     }
 
     return 1;
