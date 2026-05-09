@@ -1,14 +1,13 @@
 name: Build-musl
 
 on:
-  push:
-    workflow_dispatch:
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
-  steps:
+    steps:
       - name: Checkout
         uses: actions/checkout@v4
 
