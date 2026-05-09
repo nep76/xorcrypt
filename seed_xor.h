@@ -1,6 +1,7 @@
 #ifndef SEED_XOR_H
 #define SEED_XOR_H
 
+#define XNC_HASH_PERMIT_INLINE
 #include "xorcrypt.h"
 
 struct XncSeedXor{

@@ -13,6 +13,9 @@
 ```sh
 make
 ```
+### Supported platform
+* Windows
+* Linux
 
 ## Usage
 ```text
