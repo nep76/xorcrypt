@@ -63,6 +63,7 @@ static void create_initial_state( struct XncContext *xnc, unsigned char *salt, s
     
     // 鍵伸長
     if( ! ( xnc->flags & XNC_F_NO_STRECH ) ){
+        info( xnc, "Key-streching..." ) ;
         for( ; i < XNC_STRECH_TIMES; i++ ){
             strech.i_be = xnc_be32( i );
             hash_sha256hmac(
@@ -74,6 +75,8 @@ static void create_initial_state( struct XncContext *xnc, unsigned char *salt, s
                 strech.state
             );
         }
+    } else{
+        info( xnc, "No-strech" );
     }
 
     // 初期state
