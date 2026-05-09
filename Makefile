@@ -1,13 +1,21 @@
 CC      ?= gcc
-CFLAGS  ?= -O3 -march=x86-64 -mtune=generic -Wall -Wextra -Werror
+CFLAGS  ?= -O3 -Wall -Wextra -Werror -march=x86-64 -mtune=generic
 LDFLAGS ?= -s
 LIBS    =
 
 SUFFIX =
 
+ifdef WITH_OPTINFO
+	CFLAGS += -fopt-info
+endif
+
 ifdef WITH_AVX2
-	CFLAGS += -mavx2 -mbmi -mbmi2 -mfma -fopt-info-vec-optimized
+	CFLAGS += -mavx2 -mbmi -mbmi2 -mfma
 	SUFFIX = -avx2
+endif
+
+ifdef WITH_NATIVE
+	CFLAGS += -march=native
 endif
 
 ifeq ($(OS), Windows_NT)
@@ -26,24 +34,32 @@ all: $(TARGET)
 $(TARGET): $(OBJS)
 	$(CC) $(LDFLAGS) $(OBJS) -o $(TARGET) $(LIBS)
 
-clean:
+objclean:
 	rm -f $(OBJS) MAKETEST.$(TARGET).*
 
-allclean: clean
+binclean:
 	rm -f $(TARGET) $(TARGET).exe
 
-rebuild: clean all
+clean: 
+	$(MAKE) objclean
+	$(MAKE) WITH_AVX2=yes objclean
+
+allclean:
+	$(MAKE) objclean
+	$(MAKE) binclean
+	$(MAKE) WITH_AVX2=yes objclean
+	$(MAKE) WITH_AVX2=ues binclean
+
+rebuild: objclean all
 
 dist:
 	$(MAKE) clean
 	$(MAKE) all
-	$(MAKE) clean
+	$(MAKE) objclean
 	$(MAKE) WITH_AVX2=yes all
-	$(MAKE) clean
+	$(MAKE) WITH_AVX2=yes objclean
 
-distclean:
-	$(MAKE) allclean
-	$(MAKE) WITH_AVX2=yes allclean
+distclean: allclean
 
 test:
 	@echo "--- Testing $(TARGET) ---"
