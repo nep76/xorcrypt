@@ -81,6 +81,10 @@ void xnc_salt_seed_gen( unsigned char *buf, size_t len )
 
 void xnc_create_salt( struct XncContext *xnc, unsigned char *output, size_t len )
 {
+#if !defined(_WIN32) && defined(XNC_PERMIT_INLINE)
+    UNUSED(xnc);
+#endif
+
     xnc_salt_seed_gen( output, sizeof( len ) );
     hash_sha256( xnc, output, len, output );
 }

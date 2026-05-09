@@ -6,7 +6,7 @@ static int algo_simple_xor( struct XncContext *xnc, unsigned char *restrict buf,
 {
     struct XncSimpleXor *c = (struct XncSimpleXor *)ctx;
 
-    (void)xnc;
+    UNUSED(xnc);
 
     for( size_t i = 0; i < blocks; i++ ){
         for( size_t j = 0; j < sizeof( c->hash ); j++ ){
