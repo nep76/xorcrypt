@@ -3,3 +3,6 @@
 *.xnc
 *.jpg
 *.kra
+
+.vscode/
+xorcrypt.code-workspace
