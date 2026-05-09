@@ -44,3 +44,10 @@ dist:
 distclean:
 	$(MAKE) allclean
 	$(MAKE) WITH_AVX2=yes allclean
+
+test:
+	@cp LICENSE DELETEME.TXT
+	@echo "--- Testing no-password XOR ---"
+	./xorcrypt DELETEME.TXT || true
+	./xorcrypt DELETEME.TXT.
+

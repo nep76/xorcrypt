@@ -20,11 +20,14 @@ jobs:
               make clean || true &&
               make &&
               echo '--- Running test ---' &&
-              ./xorcrypt || true
+              ./xorcrypt || true &&
+              ./xorcrypt-avx2 || true
             "
 
       - name: Upload musl binary
         uses: actions/upload-artifact@v4
         with:
           name: xorcrypt-musl
-          path: xorcrypt
+          path: |
+            xorcrypt
+            xorcrypt-avx2

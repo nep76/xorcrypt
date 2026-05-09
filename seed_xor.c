@@ -58,18 +58,25 @@ static void create_initial_state( struct XncContext *xnc, unsigned char *salt, s
         memcpy( strech.passwd, xnc->passwd, pass_len );
     }
     
+    // 初期ハッシュ
     hash_sha256( xnc, (unsigned char *)&strech, ( sizeof( strech ) - sizeof( strech.passwd ) ) + pass_len, strech.state );
-    for( ; i < XNC_STRECH_TIMES; i++ ){
-        strech.i_be = xnc_be32( i );
-        hash_sha256hmac(
-            xnc,
-            (unsigned char *)&strech,
-            sizeof( strech ) - sizeof( strech.passwd ) + pass_len,
-            strech.state,
-            sizeof( strech.state),
-            strech.state
-        );
+    
+    // 鍵伸長
+    if( ! ( xnc->flags & XNC_F_NO_STRECH ) ){
+        for( ; i < XNC_STRECH_TIMES; i++ ){
+            strech.i_be = xnc_be32( i );
+            hash_sha256hmac(
+                xnc,
+                (unsigned char *)&strech,
+                sizeof( strech ) - sizeof( strech.passwd ) + pass_len,
+                strech.state,
+                sizeof( strech.state),
+                strech.state
+            );
+        }
     }
+
+    // 初期state
     msg.label_be = label_be;
     msg.cnt_be = xnc_be64( c->cnt );
     hash_sha256hmac( xnc, (unsigned char *)&msg, sizeof( msg ), strech.state, sizeof( strech.state ), c->state );

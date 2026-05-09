@@ -157,7 +157,7 @@ int xnc_xor_conv( struct XncContext *xnc, FILE *src, uint64_t fsize, FILE *dst, 
 static int parse_args( struct XncContext *xnc, int argc, char *argv[] )
 {
     int mdchk = 0, opt;
-    while( ( opt = getopt( argc, argv, "edfvo:x:a:p:" ) ) != -1 ){
+    while( ( opt = getopt( argc, argv, "edfvo:x:a:p:n" ) ) != -1 ){
         switch( opt ){
             case 'd':
                 xnc->mode = XNC_DECODE;
@@ -181,6 +181,9 @@ static int parse_args( struct XncContext *xnc, int argc, char *argv[] )
             default:
                 einfof( "Invalid argument: %c\n", opt );
                 return -1;
+            case 't':
+                xnc->flags |= XNC_F_NO_STRECH;
+                break;
         }
     }
 
@@ -238,7 +241,7 @@ int main( int argc, char *argv[] )
             name = XNC_NAME;
         }
         einfof( "Xor deNCrypter %s", XNC_VERSION );
-        einfof( "Usage: %s [-edfv] [-a xor|seed-xor] [-p passwd] [-o dir] [-x ext] file [file ...]", name );
+        einfof( "Usage: %s [-ednfv] [-a xor|seed-xor] [-p passwd] [-o dir] [-x ext] file [file ...]", name );
         return 1;
     }
 

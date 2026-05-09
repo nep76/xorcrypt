@@ -40,6 +40,7 @@
 #define XNC_F_AUTODETECT 0x00000001
 #define XNC_F_VERBOSE    0x00000002
 #define XNC_F_OVERWRITE  0x00000004
+#define XNC_F_NO_STRECH  0x00000008
 
 struct XncContext;
 
