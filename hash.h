@@ -4,6 +4,11 @@
 #include "xorcrypt.h"
 
 #ifdef _WIN32
+
+#ifdef XNC_PERMIT_INLINE
+#undef XNC_PERMIT_INLINE
+#endif
+
 #include <windows.h>
 
 void hash_init( struct XncContext *xnc );
@@ -19,6 +24,7 @@ void _hash_sha256( const unsigned char *msg, DWORD msg_len, unsigned char *key, 
 #undef INLINE
 #define INLINE static inline
 #endif
+
 #include <openssl/sha.h>
 #include <openssl/hmac.h>
 

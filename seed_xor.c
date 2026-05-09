@@ -37,6 +37,10 @@ static void create_initial_state( struct XncContext *xnc, unsigned char *salt, s
     size_t pass_len = 0;
     struct XncSeedXorMsg msg;
 
+#ifdef XNC_PERMIT_INLINE
+    UNUSED( xnc );
+#endif
+
     // [HASH] || [i] || [SALT] || [PASSWD]
     struct {
         unsigned char  state[XNC_HASH_SIZE];
