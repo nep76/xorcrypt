@@ -27,7 +27,7 @@ $(TARGET): $(OBJS)
 	$(CC) $(LDFLAGS) $(OBJS) -o $(TARGET) $(LIBS)
 
 clean:
-	rm -f $(OBJS) MAKETEST MAKETEST.xnc
+	rm -f $(OBJS) MAKETEST.$(TARGET).*
 
 allclean: clean
 	rm -f $(TARGET) $(TARGET).exe
@@ -47,33 +47,34 @@ distclean:
 
 test:
 	@echo "--- Testing $(TARGET) ---"
-	@cp LICENSE MAKETEST
 
+	@cp LICENSE MAKETEST.$(TARGET).XOR
 	@echo -n "Testing no-password 'xor'     : "
-	@./$(TARGET) -f MAKETEST
-	@./$(TARGET) -f MAKETEST.xnc
-	@diff LICENSE MAKETEST
+	@./$(TARGET) -f MAKETEST.$(TARGET).XOR
+	@./$(TARGET) -f MAKETEST.$(TARGET).XOR.xnc
+	@diff LICENSE MAKETEST.$(TARGET).XOR > /dev/null
 	@echo "ok"
 
+	@cp LICENSE MAKETEST.$(TARGET).PASSWD_XOR
 	@echo -n "Testing password 'xor'        : "
-	@./$(TARGET) -f -p password MAKETEST
-	@./$(TARGET) -f -p password MAKETEST.xnc
-	@diff LICENSE MAKETEST
+	@./$(TARGET) -f -p password MAKETEST.$(TARGET).PASSWD_XOR
+	@./$(TARGET) -f -p password MAKETEST.$(TARGET).PASSWD_XOR.xnc
+	@diff LICENSE MAKETEST.$(TARGET).PASSWD_XOR > /dev/null
 	@echo "ok"
 
+	@cp LICENSE MAKETEST.$(TARGET).SEED_XOR
 	@echo -n "Testing no-password 'seed-xor': "
-	@./$(TARGET) -fn -a seed-xor MAKETEST
-	@./$(TARGET) -fn -a seed-xor MAKETEST.xnc
-	@diff LICENSE MAKETEST
+	@./$(TARGET) -fn -a seed-xor MAKETEST.$(TARGET).SEED_XOR
+	@./$(TARGET) -fn -a seed-xor MAKETEST.$(TARGET).SEED_XOR.xnc
+	@diff LICENSE MAKETEST.$(TARGET).SEED_XOR > /dev/null
 	@echo "ok"
 
+	@cp LICENSE MAKETEST.$(TARGET).PASSWD_SEED_XOR
 	@echo -n "Testing password 'seed-xor'   : "
-	@./$(TARGET) -fn -a seed-xor -p password MAKETEST
-	@./$(TARGET) -fn -a seed-xor -p password MAKETEST.xnc
-	@diff LICENSE MAKETEST
+	@./$(TARGET) -fn -a seed-xor -p password MAKETEST.$(TARGET).PASSWD_SEED_XOR
+	@./$(TARGET) -fn -a seed-xor -p password MAKETEST.$(TARGET).PASSWD_SEED_XOR.xnc
+	@diff LICENSE MAKETEST.$(TARGET).PASSWD_SEED_XOR > /dev/null
 	@echo "ok"
-
-	@rm MAKETEST MAKETEST.xnc
 
 disttest:
 	@$(MAKE) --no-print-directory test
