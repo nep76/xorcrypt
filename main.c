@@ -181,7 +181,7 @@ static int parse_args( struct XncContext *xnc, int argc, char *argv[] )
             default:
                 einfof( "Invalid argument: %c\n", opt );
                 return -1;
-            case 't':
+            case 'n':
                 xnc->flags |= XNC_F_NO_STRECH;
                 break;
         }
