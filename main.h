@@ -6,7 +6,7 @@
 #include <sys/file.h>
 
 #define XNC_NAME    "xorcrypt"
-#define XNC_VERSION "26050700"
+#define XNC_VERSION "26-05-09-00"
 
 #define XNC_DEFAULT_EXT "xnc"
 
