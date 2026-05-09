@@ -1,5 +1,5 @@
 # xorcrypt
-ファイルに対してランダムな文字列で全体を簡易的にスクランブルするツールです。
+ファイルに対して全体を簡易的にスクランブルするツールです。
 コンテンツに対する機械的な解析や自動スキャンを回避することを目的としています。
 
 **このツールは暗号化はしません。  
@@ -11,12 +11,25 @@
 
 ## Build
 ```sh
-gcc -O3 -s -mavx2 xorcrypt.c -o xorcrypt.exe -lbcrypt
+# 通常版をビルド (xorcrypt)
+make
+
+# 高速版をビルド (xorcrypt-avx2)
+make WITH_AVX2=yes
+
+# ビルド時の一時ファイルを掃除
+make clean
 ```
+> [!Note]
+> 高速版は新しめのCPU向けに最適化されています。2013年頃以前の古いCPUでは動作しないことがあります。その場合は通常版を使用してください。
+
+### Supported platform
+* Windows
+* Linux (glibc / musl)
 
 ## Usage
 ```text
-Usage: xorcrypt [-edfv] [-o dir] [-x ext] [-p passwd ] [-a xor|seed-xor] file [file ...]
+Usage: xorcrypt [-ednfv] [-o dir] [-x ext] [-p passwd ] [-a xor|seed-xor] file [file ...]
 ```
 * `-e`: 指定されたファイルを難読化するスクランブルモードを強制  
 （無指定で自動判別）
@@ -30,6 +43,7 @@ Usage: xorcrypt [-edfv] [-o dir] [-x ext] [-p passwd ] [-a xor|seed-xor] file [f
 * `-a`: XOR変換アルゴリズム
   - xor: 単純変換モード（デフォルト）
   - seed-xor: 限定的用途（[seed-xor](#seed-xor)参照）
+* `-n`: seed-xorで鍵伸長をしない（パスワードなしやテスト用）
 * `file ...`: 変換対象のファイル
 
 複数のjpgをC:/Users/user/secretに変換して出力する例:
@@ -52,7 +66,7 @@ Windowsの右クリックの「送る」から使うことを想定している�
 > * スクランブルモードは自動的に指定拡張子を付与し、復元モードは指定拡張子を外す動作をします。これは自動判別に関わらず行われるので通常は`-e`や`-d`を指定せずに自動判別モードで使用してください。
 
 ## How it works
-1. ランダムに生成した文字列からSHA-256ハッシュ値(32バイト)を生成
+1. ランダムに生成したバイト列からSHA-256ハッシュ値(32バイト)を生成
 1. ファイル全体を生成したハッシュ値を循環させてXOR演算
 1. 最後にハッシュ値をファイルの末尾に書きこむ
 
@@ -96,19 +110,19 @@ SHA256の拡散効果で単純XORよりもパターンが隠ぺいされやす�
 ### Recovery
 一応復号するための手順と概念的なコードを書いておきます。コード中でハッシュ関数に入力する整数値はすべてビッグエンディアンです。(BE32やBE64と表記します)
 
-1. まずファイルの末尾に記録されている32文字の`salt`を取り出します。これはハッシュ値ではなくコード内の`XNC_CHAR_SET`内の文字列からランダムに生成されたASCII文字列で「`7iO%v]Lt&lv@ihd}>XS&]LIlj+xrbu-b`」のようなデータになっています。
-1. 取り出した文字列と設定したパスワードを使って以下の方法で初期ハッシュを生成します。
+1. まずファイルの末尾に記録されている32バイトの`salt`を取り出します。
+1. 取り出したバイト列と設定したパスワードを使って以下の方法で初期ハッシュを生成します。
 ```text
-initial state = SHA256( BE32(0xC0DECAFE) || 0(パディング28バイト分) || BE32(0) || salt || password )
+pre state = SHA256( BE32(0xC0DECAFE) || 0(パディング28バイト分) || BE32(0) || salt || password )
 ```
-3. 次にこの初期ハッシュを使ってHMAC-SHA256で再ハッシュ化を1,000,000回繰り返して簡易鍵伸長をします。
+3. 次にこの初期ハッシュを使ってHMAC-SHA256で再ハッシュ化を1,000,000回繰り返して簡易鍵伸長をします。もし`-n`スイッチで鍵伸長せずに処理したデータの場合はこの処理を丸ごと飛ばしてください。
 ```text
 for( uint32 i = 0...999999 )
     state = HMAC-SHA256( key=state,  message=state || BE32(i) || salt || password )
 ```
-4. 鍵伸長を終えた鍵を以下のようにハッシュ化してマスターハッシュを生成します。
+4. 鍵伸長を終えた鍵を以下のようにハッシュ化して初期`state`を生成します。
 ```text
-state = HMAC-SHA256( key=state, message=BE32(0xC0DECAFE) || BE64(0) )
+initial state = HMAC-SHA256( key=state, message=BE32(0xC0DECAFE) || BE64(0) )
 ```
 5. この`state`を使って`keystream`を生成し、実際にXOR演算をしていきます。ただし、SHA256のビット長である32バイト処理するごとにこれらを更新します。
 ```text
