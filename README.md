@@ -11,7 +11,7 @@
 
 ## Build
 ```sh
-# 汎用版をビルド (xorcrypt)
+# 通常版をビルド (xorcrypt)
 make
 
 # 高速版をビルド (xorcrypt-avx2)
@@ -21,7 +21,7 @@ make WITH_AVX2=yes
 make clean
 ```
 > [!Note]
-> 高速版は新しめのCPU向けに最適化されています。2013年頃以前の古いCPUでは動作しないことがあります。その場合は汎用版を使用してください。
+> 高速版は新しめのCPU向けに最適化されています。2013年頃以前の古いCPUでは動作しないことがあります。その場合は通常版を使用してください。
 
 ### Supported platform
 * Windows
