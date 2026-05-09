@@ -19,7 +19,7 @@ endif
 SRCS = $(wildcard *.c)
 OBJS = $(SRCS:.c=.o)
 
-TARGET  = xorcrypt$(SUFFIX)
+TARGET = xorcrypt$(SUFFIX)
 
 all: $(TARGET)
 
@@ -42,12 +42,41 @@ dist:
 	$(MAKE) clean
 
 distclean:
+	rm -f MAKETEST MAKETEST.xnc
 	$(MAKE) allclean
 	$(MAKE) WITH_AVX2=yes allclean
 
 test:
-	@cp LICENSE DELETEME.TXT
-	@echo "--- Testing no-password XOR ---"
-	./xorcrypt DELETEME.TXT || true
-	./xorcrypt DELETEME.TXT.
+	@echo "--- Testing $(TARGET) ---"
+	@cp LICENSE MAKETEST
 
+	@echo -n "Testing no-password 'xor'     : "
+	@./$(TARGET) -f MAKETEST
+	@./$(TARGET) -f MAKETEST.xnc
+	@diff LICENSE MAKETEST
+	@echo "ok"
+
+	@echo -n "Testing password 'xor'        : "
+	@./$(TARGET) -f -p password MAKETEST
+	@./$(TARGET) -f -p password MAKETEST.xnc
+	@diff LICENSE MAKETEST
+	@echo "ok"
+
+	@echo -n "Testing no-password 'seed-xor': "
+	@./$(TARGET) -fn -a seed-xor MAKETEST
+	@./$(TARGET) -fn -a seed-xor MAKETEST.xnc
+	@diff LICENSE MAKETEST
+	@echo "ok"
+
+	@echo -n "Testing password 'seed-xor'   : "
+	@./$(TARGET) -fn -a seed-xor -p password MAKETEST
+	@./$(TARGET) -fn -a seed-xor -p password MAKETEST.xnc
+	@diff LICENSE MAKETEST
+	@echo "ok"
+
+	@rm MAKETEST MAKETEST.xnc
+
+disttest:
+	@$(MAKE) --no-print-directory test
+	@$(MAKE) --no-print-directory WITH_AVX2=yes test
+	
