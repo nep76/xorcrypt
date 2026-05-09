@@ -1,7 +1,7 @@
 name: Build-musl
 
 on:
-  workflow_dispatch:
+  push:
 
 jobs:
   build:
