@@ -13,7 +13,8 @@ void _dumpbin( const char *label, const char *fmt, const unsigned char *bytes, s
 {
     if( label ) printf( "%s: ", label );
     for( int i = 0; i < len; i++ ){
-        printf( "%c", bytes[i] );
+        if( i % 0x10 == 0 ) printf( "\n  " );
+        printf( fmt, bytes[i] );
     }
     fputc( '\n' ,stdout );
 }

@@ -12,8 +12,14 @@
 
 static unsigned char st_xnc_buffer[XNC_BUF_SIZE];
 
+static void _show_progress( uint64_t cur, uint64_t max )
+{
+    printf( "\rProgress: %3d%% [%" PRIu64 " / %" PRIu64 " bytes]", (int)( cur * 100 / max ), cur, max );
+    fflush( stdout );
+}
+
 // パスをディレクトリとファイル名に分けて正規化
-static int get_dir_and_name_by_path( const char *src, char *dst_dir, char *dst_name, size_t max_len )
+static int _get_dir_and_name_by_path( const char *src, char *dst_dir, char *dst_name, size_t max_len )
 {
     char buf[MAX_PATH_LEN], *dst, *name = NULL;
     size_t cnt = 0;
@@ -66,7 +72,7 @@ static int get_dir_and_name_by_path( const char *src, char *dst_dir, char *dst_n
 }
 
 // 終端にNULLを書きこまない
-void keygen( unsigned char *buf, size_t len )
+void xnc_salt_seed_gen( unsigned char *buf, size_t len )
 {
     const char *charset = XNC_CHAR_SET;
     int cnum = strlen( charset );
@@ -76,26 +82,46 @@ void keygen( unsigned char *buf, size_t len )
     }
 }
 
-int xor_conv( struct XncContext *xnc, FILE *src, uint64_t fsize, FILE *dst, struct XncAlgoParams *p )
+void xnc_create_salt( struct XncContext *xnc, unsigned char *output, size_t len )
+{
+    xnc_salt_seed_gen( output, sizeof( len ) );
+    hash_sha256( xnc, output, len, output );
+}
+
+size_t xnc_read_salt( FILE *fp, unsigned char *output, size_t len )
+{
+    fseek( fp, -( len ), SEEK_END );
+    return fread( output, 1, len, fp );
+}
+
+void xnc_write_salt( FILE *fp, const unsigned char *salt, size_t len )
+{
+    fseek( fp, 0, SEEK_END );
+    fwrite( salt, 1, len, fp );
+}
+
+int xnc_xor_conv( struct XncContext *xnc, FILE *src, uint64_t fsize, FILE *dst, struct XncAlgoParams *p )
 {
     unsigned char *buf = st_xnc_buffer;
     uint64_t progress = 0;
     size_t read_bytes;
     clock_t clock_now, clock_last_notice = 0;
 
-    fseek64( src, 0, SEEK_SET );
-    fseek64( dst, 0, SEEK_SET );
+    fseek( src, 0, SEEK_SET );
+    fseek( dst, 0, SEEK_SET );
 
     while( progress < fsize ){
+        // 進捗表示
         if( xnc->flags & XNC_F_VERBOSE && ( clock_now = clock() ) - clock_last_notice >= CLOCKS_PER_SEC ){
-            printf( "\rProgress: %3d%% [%" PRIu64 " / %" PRIu64 " bytes]", (int)( progress * 100 / fsize ), progress, fsize );
-            fflush( stdout );
+            _show_progress( progress, fsize );
             clock_last_notice = clock_now;
         }
 
+        // XNC_BUF_SIZE読み出す
+        // 残りがXNC_BUF_SIZE以下なら残りのサイズに合わせる
         read_bytes = fread(
             buf,
-            sizeof( char ),
+            1,
             ( fsize - progress < XNC_BUF_SIZE ) ? ( fsize - progress ) : XNC_BUF_SIZE,
             src
         );
@@ -105,10 +131,10 @@ int xor_conv( struct XncContext *xnc, FILE *src, uint64_t fsize, FILE *dst, stru
         }
 
         // 必ず32バイト境界で読みだしたことにする
-        p->fn_xor( xnc, buf, ( read_bytes + 31 ) / 32, p->ctx );
+        p->xor( xnc, buf, ( read_bytes + 31 ) / 32, p->ctx );
 
         // 実際の読み出しサイズのみ書きこむ
-        if( fwrite( buf, sizeof( char ), read_bytes, dst ) != read_bytes ){
+        if( fwrite( buf, 1, read_bytes, dst ) != read_bytes ){
             einfo( "\nFailed to write output file in coverting." );
             return 0;
         }
@@ -116,10 +142,9 @@ int xor_conv( struct XncContext *xnc, FILE *src, uint64_t fsize, FILE *dst, stru
     }
 
     if( xnc->flags & XNC_F_VERBOSE ){
-        printf( "\rProgress: 100%% [%" PRIu64 " / %" PRIu64 " bytes]", progress, fsize );
-        fflush( stdout );
+        _show_progress( fsize, fsize );
+        printf( "\n" );
     }
-    printf( "\n" );
 
     return 1;
 }
@@ -139,14 +164,6 @@ static int parse_args( struct XncContext *xnc, int argc, char *argv[] )
                 break;
             case 'a':
                 for( int i = 0; optarg[i] != '\0'; i++ ) optarg[i] = tolower( optarg[i] );
-                if( strcmp( optarg, "xor" ) == 0 ){
-                    xnc->algo.func = simple_xor;
-                } else if( strcmp( optarg, "seed-xor" ) == 0 ){
-                    xnc->algo.func = seed_xor;
-                } else{
-                    einfo( "Invalid algorithm specified.\n" );
-                    return -1;
-                }
                 xnc->algo.name = optarg;
                 break;
             case 'p': xnc->passwd = optarg;          break;
@@ -169,7 +186,20 @@ static int parse_args( struct XncContext *xnc, int argc, char *argv[] )
         return -1;
     }
 
+    if( ! xnc->ext ) xnc->ext = XNC_DEFAULT_EXT;
+
     if( xnc->passwd && xnc->passwd[0] == '\0' ) xnc->passwd = NULL;
+
+    if( ! xnc->algo.name || strcmp( xnc->algo.name, "xor" ) == 0 ){
+        xnc->algo.name = "xor";
+        xnc->algo.func = simple_xor;
+    } else if( strcmp( xnc->algo.name, "seed-xor" ) == 0 ){
+        xnc->algo.name = "seed-xor";
+        xnc->algo.func = seed_xor;
+    } else{
+        einfo( "Invalid algorithm specified.\n" );
+        return -1;
+    }
 
     if( argc < ( optind + 1 ) ){
         einfof( "Xor deNCrypter %s", XNC_VERSION );
@@ -198,13 +228,10 @@ int main( int argc, char *argv[] )
 
     xnc.buf = st_xnc_buffer;
 
-    info( &xnc, "-----------------------------------------------" );
-    infof( &xnc, "XOR Algorithm: %s", xnc.algo.name );
-
     srand( (unsigned int)time( NULL ) ^ ( (unsigned int)clock() << 16 ) );
 
     for( int offset = args_offset; offset < argc ; offset++ ){
-        if( ! get_dir_and_name_by_path( argv[offset], path_dir, path_file, MAX_PATH_LEN ) ){
+        if( ! _get_dir_and_name_by_path( argv[offset], path_dir, path_file, MAX_PATH_LEN ) ){
             einfof( "Failed to parse source path strings: %s", argv[offset] );
             goto NEXT;
         }
@@ -243,7 +270,7 @@ int main( int argc, char *argv[] )
         }
 
         // ファイルサイズを取得
-        fseek64( src, 0, SEEK_END );
+        fseek( src, 0, SEEK_END );
         src_size = ftell64( src );
 
         // 処理に必要な出力パスを取得
@@ -290,7 +317,7 @@ int main( int argc, char *argv[] )
         }
 
         // 変換
-        info( &xnc, "Processing..." );
+        infof( &xnc, "Processing %s ...", xnc.algo.name );
         xnc.algo.func( &xnc, src, src_size, dst );
 
         if( ferror( src ) || ferror( dst ) ){

@@ -1,7 +1,7 @@
 {
     "tasks": [
         {
-            "type": "shell",
+            "type": "process",
             "label": "build",
             "command": "make",
             "problemMatcher": [
@@ -13,7 +13,7 @@
             }
         },
         {
-            "type": "shell",
+            "type": "process",
             "label": "clean",
             "command": "make",
             "args": [

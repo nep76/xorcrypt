@@ -17,24 +17,19 @@ static int _algo_simple_xor( struct XncContext *xnc, unsigned char *restrict buf
 int simple_xor( struct XncContext *xnc, FILE *src, uint64_t src_size, FILE *dst )
 {
     struct XncAlgoParams p;
-    struct XncSimpleXor c;
-    unsigned char hash[XNC_HASH_SIZE];
+    struct XncSimpleXor  c;
+    unsigned char salt[XNC_SALT_SIZE];
 
-    p.fn_xor = _algo_simple_xor;
+    p.xor = _algo_simple_xor;
     p.ctx = &c;
 
     switch( xnc->mode ){
         case XNC_ENCODE:
-            keygen( c.salt, sizeof( c.salt ) );
-            sha256( xnc, c.salt, sizeof( c.salt ), hash );
+            xnc_create_salt( xnc, salt, sizeof( salt ) );
             break;
         case XNC_DECODE:
-            fseek64( src, -( sizeof( hash ) ), SEEK_END );
-            fread( hash, sizeof( char ), sizeof( hash ), src );
-            src_size -= sizeof( hash );
+            src_size -= xnc_read_salt( src, salt, sizeof( salt ) );
             break;
-        default:
-            return 0;
     }
 
     // パスワードが設定されている場合はキーとパスワードを合わせて
@@ -43,25 +38,24 @@ int simple_xor( struct XncContext *xnc, FILE *src, uint64_t src_size, FILE *dst 
         size_t pass_len = strlen( xnc->passwd );
 
         struct {
-            char hash[XNC_HASH_SIZE];
+            char   salt[XNC_SALT_SIZE];
             char passwd[XNC_MAX_PASSWD];
         } __attribute__((packed)) seed;
 
-        memcpy( (void *)seed.hash, hash, sizeof( seed.hash ) );
+        memcpy( (void *)seed.salt, salt, sizeof( salt ) );
         memcpy( (void *)seed.passwd, xnc->passwd, pass_len );
-        sha256( xnc, (unsigned char *)&seed, sizeof( seed.hash ) + pass_len, c.hash );
+        hash_sha256( xnc, (unsigned char *)&seed, sizeof( seed.salt ) + pass_len, c.hash );
     } else{
-        memcpy( c.hash, hash, sizeof( hash ) );
+        memcpy( c.hash, salt, sizeof( salt ) );
     }
 
-    dumphash( xnc, "Hash", (unsigned char *)c.hash, sizeof( c.hash ) );
+    info_dumphex( xnc, "Salt", (unsigned char *)c.hash, sizeof( c.hash ) );
     
     // 変換
-    xor_conv( xnc, src, src_size, dst, &p );
+    xnc_xor_conv( xnc, src, src_size, dst, &p );
 
     if( xnc->mode == XNC_ENCODE ){
-        info( xnc, "Added decode key.");
-        fwrite( hash, sizeof( char ), sizeof( hash ), dst );
+        fwrite( salt, 1, sizeof( salt ), dst );
     }
 
     return 1;

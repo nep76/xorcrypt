@@ -43,7 +43,7 @@ void hash_destroy( struct XncContext *xnc )
 
 
 // 終端にNULLを書きこまない
-void _sha256( const unsigned char *msg, DWORD msg_len, unsigned char *key, DWORD key_len, unsigned char *dst, struct XncBCryptPvd *pvd )
+void _hash_sha256( const unsigned char *msg, DWORD msg_len, unsigned char *key, DWORD key_len, unsigned char *dst, struct XncBCryptPvd *pvd )
 {
     BCRYPT_HASH_HANDLE h_hash = NULL;
     NTSTATUS rv = 0;

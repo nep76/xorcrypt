@@ -11,7 +11,7 @@
 
 ## Build
 ```sh
-gcc -O3 -s -mavx2 xorcrypt.c -o xorcrypt.exe -lbcrypt
+make
 ```
 
 ## Usage

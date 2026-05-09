@@ -23,14 +23,12 @@
 #ifdef _WIN32
 #include <windows.h>
 #define MAX_PATH_LEN MAX_PATH
-#define fseek64 _fseeki64
 #define ftell64 _ftelli64
 #define xnc_be64( x ) _byteswap_uint64( x )
 #define xnc_be32( x ) _byteswap_ulong( x )
 #else
 // そのうち
 #define MAX_PATH_LEN PATH_MAX
-#define fseek64 fseeko
 #define ftell64 ftello
 #define xnc_be64( x ) htobe64( x )
 #define xnc_be32( x ) htobe32( x )
@@ -55,7 +53,7 @@ enum XncRunMode {
 };
 
 struct XncAlgoParams {
-    XncXorFunc fn_xor;
+    XncXorFunc xor;
     void *ctx;
 };
 
@@ -86,7 +84,9 @@ struct XncContext {
     unsigned char *buf;
 };
 
-void keygen( unsigned char *buf, size_t len );
-int xor_conv( struct XncContext *xnc, FILE *src, uint64_t fsize, FILE *dst, struct XncAlgoParams *p );
+void   xnc_salt_seed_gen( unsigned char *buf, size_t len );
+size_t xnc_read_salt( FILE *src, unsigned char *output, size_t len );
+void   xnc_create_salt( struct XncContext *xnc, unsigned char *output, size_t len );
+int    xnc_xor_conv( struct XncContext *xnc, FILE *src, uint64_t fsize, FILE *dst, struct XncAlgoParams *p );
 
 #endif

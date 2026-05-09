@@ -1,5 +1,5 @@
 CC      = gcc
-CFLAGS  = -std=c99 -O3 -s -mavx2 -fopt-info-vec-optimized -Wall 
+CFLAGS  = -O3 -s -mavx2 -fopt-info-vec-optimized -Wall 
 LDFLAGS = -lbcrypt
 
 SRCS = $(wildcard *.c)
@@ -13,4 +13,7 @@ $(TARGET): $(OBJS)
 	$(CC) $(OBJS) -o $(TARGET) $(LDFLAGS)
 
 clean:
-	rm -f $(OBJS) $(TARGET)
+	rm -f $(OBJS)
+
+distclean: clean
+	rm -f $(TARGET) $(TARGET).exe
