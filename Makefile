@@ -1,6 +1,6 @@
 CC      ?= gcc
-CFLAGS  ?= -O3 -Wall -Wextra -Werror -march=x86-64 -mtune=generic
-LDFLAGS ?=  -s -Wl,--gc-sections
+CFLAGS  ?= -O3 -ffunction-sections -fdata-sections -Wall -Wextra -Werror
+LDFLAGS ?= -s -Wl,--gc-sections
 LIBS    =
 
 SUFFIX =
@@ -34,20 +34,16 @@ all: $(TARGET)
 $(TARGET): $(OBJS)
 	$(CC) $(LDFLAGS) $(OBJS) -o $(TARGET) $(LIBS)
 
-objclean:
+clean:
 	rm -f $(OBJS) MAKETEST.$(TARGET).*
 
 binclean:
 	rm -f $(TARGET) $(TARGET).exe
 
-clean: 
-	$(MAKE) objclean
-	$(MAKE) WITH_AVX2=yes objclean
-
 allclean:
-	$(MAKE) objclean
+	$(MAKE) clean
 	$(MAKE) binclean
-	$(MAKE) WITH_AVX2=yes objclean
+	$(MAKE) clean
 	$(MAKE) WITH_AVX2=yes binclean
 
 rebuild: objclean all
@@ -56,7 +52,7 @@ dist: allclean
 	$(MAKE) all
 	$(MAKE) clean
 	$(MAKE) WITH_AVX2=yes all
-	$(MAKE) WITH_AVX2=yes clean
+	$(MAKE) clean
 
 distclean: allclean
 
