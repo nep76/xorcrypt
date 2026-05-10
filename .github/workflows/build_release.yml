@@ -4,22 +4,21 @@ on:
   workflow_dispatch:
     inputs:
       build_linux_glibc:
-        description: "Build for Linux-glibc"
+        description: "Build for x86-64 Linux-glibc"
         type: boolean
         default: true
       build_linux_musl:
-        description: "Build for Linux-musl"
+        description: "Build for x86-64 Linux-musl"
         type: boolean
         default: true
-      build_windows:
-        description: "Build for Windows"
+      build_windows_ucrt:
+        description: "Build for x86-64 Windows-ucrt"
         type: boolean
         default: true
       target_branch:
         description: "Switch branch to"
         required: true
         default: "main"
-      
 
 permissions:
   contents: write
@@ -32,11 +31,11 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            target: linux-glibc
+            target: x86_64-linux-glibc
           - os: ubuntu-latest
-            target: linux-musl
+            target: x86_64-linux-musl
           - os: windows-latest
-            target: win64
+            target: x86_64-windows-ucrt
 
     steps:
       - name: Checkout
@@ -54,7 +53,7 @@ jobs:
       - name: Build on Linux with glibc
         if: |
           github.event.inputs.build_linux_glibc == 'true' &&
-          matrix.target == 'linux-glibc'
+          matrix.target == 'x86_64-linux-glibc'
         run: |
           sudo apt update
           sudo apt install -y build-essential libssl-dev
@@ -69,9 +68,9 @@ jobs:
       - name: Build on Linux with musl inside Alpine
         if: |
           github.event.inputs.build_linux_musl == 'true' &&
-          matrix.target == 'linux-musl'
+          matrix.target == 'x86_64-linux-musl'
         run: |
-          docker run --rm -v ${{ github.workspace }}:/src -w /src alpine:latest \
+          docker run --rm -v ${{ github.workspace }}:/src -w /src alpine \
             sh -c "
               apk add --no-cache build-base openssl-dev &&
               make distclean dist disttest &&
@@ -83,27 +82,29 @@ jobs:
               LICENSE
             "
             
-      #- name: Build on Windows
-      #  if: matrix.target == 'win64'
-      #  shell: bash
-      #  run: make distclean dist disttest
-
-      - name: Build on Windows with w64devkit
+      - name: Build on Windows
         if: |
-          github.event.inputs.build_windows == 'true' &&
-          matrix.target == 'win64'
+          github.event.inputs.build_windows_ucrt == 'true' &&
+          matrix.target == 'x86_64-windows-ucrt'
         shell: bash
-        run: |
-          mkdir _tmp
-          curl -L https://github.com/skeeto/w64devkit/releases/download/v2.7.0/w64devkit-x64-2.7.0.7z.exe -o _tmp/w64d_setup.exe
-          ./_tmp/w64d_setup.exe -y -o_tmp
-          export PATH="${GITHUB_WORKSPACE}/_tmp/w64devkit/bin:${PATH}"
-          make distclean dist disttest
+        run: make distclean dist disttest
+
+      #- name: Build on Windows with w64devkit
+      #  if: |
+      #    github.event.inputs.build_windows == 'true' &&
+      #    matrix.target == 'win64'
+      #  shell: bash
+      #  run: |
+      #    mkdir _tmp
+      #    curl -L https://github.com/skeeto/w64devkit/releases/download/v2.7.0/w64devkit-x64-2.7.0.7z.exe -o _tmp/w64d_setup.exe
+      #    ./_tmp/w64d_setup.exe -y -o_tmp
+      #    export PATH="${GITHUB_WORKSPACE}/_tmp/w64devkit/bin:${PATH}"
+      #    make distclean dist disttest
 
       - name: Archive for Windows
         if: |
-          github.event.inputs.build_windows == 'true' &&
-          matrix.target == 'win64'
+          github.event.inputs.build_windows_ucrt == 'true' &&
+          matrix.target == 'x86_64-windows-ucrt'
         shell: pwsh
         run: |
           Compress-Archive -DestinationPath xorcrypt-${{ steps.vars.outputs.ver_str }}-${{ matrix.target }}.zip -Path `

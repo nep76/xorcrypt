@@ -18,7 +18,7 @@
 #include "simple_xor.h"
 #include "seed_xor.h"
 
-static unsigned char st_xnc_buffer[XNC_BUF_SIZE];
+static unsigned char st_xnc_buffer[XNC_BUF_SIZE] __attribute__((section(".bss")));
 
 static void _show_progress( uint64_t cur, uint64_t max )
 {
