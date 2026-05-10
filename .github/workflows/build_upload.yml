@@ -10,11 +10,17 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
 
     strategy:
       matrix:
-        target: [glibc, musl]
+        include:
+          - os: ubuntu-latest
+            target: glibc
+          - os: ubuntu-latest
+            target: musl
+          - os: windows-latest
+            target: windows
 
     steps:
       - name: Checkout
@@ -25,14 +31,21 @@ jobs:
       - name: Show branch
         run: echo "Switch ${{ github.event.inputs.target_branch }}"
 
-      - name: Build with glibc
+      - name: Set version
+        id: vars
+        shell: bash
+        run: |
+          VERSION=$(grep "VERSION" ./xorcrypt.h | cut -d ' ' -f 3 | tr -d ' ' || echo V)
+          echo "ver_str=$VERSION" >> $GITHUB_OUTPUT
+      
+      - name: Build on Linux with glibc
         if: matrix.target == 'glibc'
         run: |
           sudo apt update
           sudo apt install -y build-essential libssl-dev
           make distclean dist disttest
 
-      - name: Build with musl inside Alpine
+      - name: Build on Linux with musl inside Alpine
         if: matrix.target == 'musl'
         run: |
           docker run --rm -v ${{ github.workspace }}:/src -w /src alpine:latest \
@@ -40,13 +53,20 @@ jobs:
               apk add --no-cache build-base openssl-dev &&
               make distclean dist disttest
             "
+      
+      - name: Build on Windows
+        if: matrix.target == 'windows'
+        shell: bash
+        run: make distclean dist disttest
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
-          name: xorcrypt-V-${{ matrix.target }}
+          name: xorcrypt-${{ steps.vars.outputs.ver_str }}-${{ matrix.target }}
           path: |
             ./xorcrypt
             ./xorcrypt-avx2
+            ./xorcrypt.exe
+            ./xorcrypt-avx2.exe
             ./README.md
             ./LICENSE
