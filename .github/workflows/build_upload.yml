@@ -16,11 +16,11 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            target: glibc
+            target: linux-glibc
           - os: ubuntu-latest
-            target: musl
+            target: linux-musl
           - os: windows-latest
-            target: windows
+            target: win64
 
     steps:
       - name: Checkout
@@ -35,18 +35,18 @@ jobs:
         id: vars
         shell: bash
         run: |
-          VERSION=$(grep "VERSION" ./xorcrypt.h | cut -d ' ' -f 3 | tr -d ' ' || echo V)
+          VERSION=$(grep "VERSION" ./xorcrypt.h | cut -d ' ' -f 3 | tr -d ' "' || echo V)
           echo "ver_str=$VERSION" >> $GITHUB_OUTPUT
       
       - name: Build on Linux with glibc
-        if: matrix.target == 'glibc'
+        if: matrix.target == 'linux-glibc'
         run: |
           sudo apt update
           sudo apt install -y build-essential libssl-dev
           make distclean dist disttest
 
       - name: Build on Linux with musl inside Alpine
-        if: matrix.target == 'musl'
+        if: matrix.target == 'linux-musl'
         run: |
           docker run --rm -v ${{ github.workspace }}:/src -w /src alpine:latest \
             sh -c "
@@ -55,7 +55,7 @@ jobs:
             "
       
       - name: Build on Windows
-        if: matrix.target == 'windows'
+        if: matrix.target == 'win64'
         shell: bash
         run: make distclean dist disttest
 
