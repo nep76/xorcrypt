@@ -3,10 +3,26 @@ name: Build and Release
 on:
   workflow_dispatch:
     inputs:
+      build_linux_glibc:
+        description: "Build for Linux-glibc"
+        type: boolean
+        default: true
+      build_linux_musl:
+        description: "Build for Linux-musl"
+        type: boolean
+        default: true
+      build_windows:
+        description: "Build for Windows"
+        type: boolean
+        default: true
       target_branch:
-        description: "Switch branch"
+        description: "Switch branch to"
         required: true
-        default: "wip"
+        default: "main"
+      
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -36,44 +52,64 @@ jobs:
           echo "ver_str=$VERSION" >> $GITHUB_OUTPUT
       
       - name: Build on Linux with glibc
-        if: matrix.target == 'linux-glibc'
+        if: |
+          github.event.inputs.build_linux_glibc == 'true' &&
+          matrix.target == 'linux-glibc'
         run: |
           sudo apt update
           sudo apt install -y build-essential libssl-dev
           make distclean dist disttest
-
-      - name: Build on Linux with musl inside Alpine
-        if: matrix.target == 'linux-musl'
-        run: |
-          docker run --rm -v ${{ github.workspace }}:/src -w /src alpine:latest \
-            sh -c "
-              apk add --no-cache build-base openssl-dev &&
-              make distclean dist disttest
-            "
-      
-      - name: Build on Windows
-        if: matrix.target == 'win64'
-        shell: bash
-        run: make distclean dist disttest
-
-      - name: Archiving for Linux
-        if: matrix.target == 'linux-glibc' || matrix.target == 'linux-musl'
-        run: |
           chmod +x ./xorcrypt ./xorcrypt-avx2
           tar -cvzf xorcrypt-${{ steps.vars.outputs.ver_str }}-${{ matrix.target }}.tar.gz \
           xorcrypt \
           xorcrypt-avx2 \
           README.md \
           LICENSE
-      
-      - name: Archiving for Windows
-        if: matrix.target == 'win64'
+
+      - name: Build on Linux with musl inside Alpine
+        if: |
+          github.event.inputs.build_linux_musl == 'true' &&
+          matrix.target == 'linux-musl'
+        run: |
+          docker run --rm -v ${{ github.workspace }}:/src -w /src alpine:latest \
+            sh -c "
+              apk add --no-cache build-base openssl-dev &&
+              make distclean dist disttest &&
+              chmod +x ./xorcrypt ./xorcrypt-avx2 &&
+              tar -cvzf xorcrypt-${{ steps.vars.outputs.ver_str }}-${{ matrix.target }}.tar.gz \
+              xorcrypt \
+              xorcrypt-avx2 \
+              README.md \
+              LICENSE
+            "
+            
+      #- name: Build on Windows
+      #  if: matrix.target == 'win64'
+      #  shell: bash
+      #  run: make distclean dist disttest
+
+      - name: Build on Windows with w64devkit
+        if: |
+          github.event.inputs.build_windows == 'true' &&
+          matrix.target == 'win64'
         shell: bash
         run: |
-          zip xorcrypt-${{ steps.vars.outputs.ver_str }}-${{ matrix.target }}.zip \
-          xorcrypt.exe \
-          xorcrypt-avx2.exe \
-          README.md \
+          mkdir _tmp
+          curl -L https://github.com/skeeto/w64devkit/releases/download/v2.7.0/w64devkit-x64-2.7.0.7z.exe -o _tmp/w64d_setup.exe
+          ./_tmp/w64d_setup.exe -y -o_tmp
+          export PATH="${GITHUB_WORKSPACE}/_tmp/w64devkit/bin:${PATH}"
+          make distclean dist disttest
+
+      - name: Archive for Windows
+        if: |
+          github.event.inputs.build_windows == 'true' &&
+          matrix.target == 'win64'
+        shell: pwsh
+        run: |
+          Compress-Archive -DestinationPath xorcrypt-${{ steps.vars.outputs.ver_str }}-${{ matrix.target }}.zip -Path `
+          xorcrypt.exe,
+          xorcrypt-avx2.exe,
+          README.md,
           LICENSE
 
       - name: Upload binary
@@ -103,10 +139,14 @@ jobs:
       - name: Fetch artifacts
         uses: actions/download-artifact@v4
         with:
-          path: ./dist
+          merge-multiple: true
       
       - name: Create draft-release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create ${{ steps.vars.outputs.ver_str }} ./dist/* --draft --generate-notes
+          files=$(ls *.tar.gz *.zip 2>/dev/null || true)
+          if [ -n "$files" ]
+          then
+            gh release create ${{ steps.vars.outputs.ver_str }} ${files} --draft --generate-notes
+          fi

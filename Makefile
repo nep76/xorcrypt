@@ -1,6 +1,6 @@
 CC      ?= gcc
 CFLAGS  ?= -O3 -Wall -Wextra -Werror -march=x86-64 -mtune=generic
-LDFLAGS ?= -s
+LDFLAGS ?=  -s -Wl,--gc-sections
 LIBS    =
 
 SUFFIX =
