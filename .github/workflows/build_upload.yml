@@ -1,4 +1,4 @@
-name: Build-musl
+name: Build and Upload binary
 
 on:
   workflow_dispatch:
@@ -44,7 +44,7 @@ jobs:
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
-          name: build-${{ matrix.target }}
+          name: xorcrypt-V-${{ matrix.target }}
           path: |
             ./xorcrypt
             ./xorcrypt-avx2
