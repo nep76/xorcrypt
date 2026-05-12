@@ -5,6 +5,7 @@
 #else
 #include <openssl/sha.h>
 #include <openssl/hmac.h>
+#include <openssl/evp.h>
 #endif
 
 #ifdef _WIN32
@@ -28,7 +29,7 @@ void hash_init( struct XncContext *xnc )
     } 
 
     if( rv != 0 ){
-        einfo( "Failed to initialize SHA256 provider. aborting." );
+        einfo( "Failed to initialize SHA256 provider. Aborting." );
         exit( 1 );
     }
 }
@@ -65,7 +66,7 @@ void _hash_sha256( const unsigned char *msg,
     }
     
     if( rv != 0 ){
-        einfo( "Failed to calculate SHA256. aborting." );
+        einfo( "Failed to calculate SHA256. Aborting." );
         exit( 1 );
     }
 }
