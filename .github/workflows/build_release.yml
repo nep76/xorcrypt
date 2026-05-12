@@ -146,7 +146,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          files=$(ls *.tar.gz *.zip 2>/dev/null || true)
+          files=$(ls *.zip *.tar.gz 2>/dev/null || true)
           if [ -n "$files" ]
           then
             gh release create ${{ steps.vars.outputs.ver_str }} ${files} --draft --generate-notes

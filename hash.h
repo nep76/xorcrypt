@@ -5,7 +5,7 @@
 
 #ifdef _WIN32
 
-#define XNC_HASH_CONTEXT( xnc )
+#define XNC_HASH_SUPPRESS_UNUSED_WARN( xnc )
 
 #include <windows.h>
 
@@ -17,7 +17,7 @@ void _hash_sha256( const unsigned char *msg, DWORD msg_len, unsigned char *key, 
 
 #else
 
-#define XNC_HASH_CONTEXT( xnc ) UNUSED( xnc )
+#define XNC_HASH_SUPPRESS_UNUSED_WARN( xnc ) UNUSED( xnc )
 
 #define INLINE
 #ifdef XNC_PERMIT_INLINE

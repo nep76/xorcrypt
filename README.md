@@ -13,7 +13,7 @@
 [リリースから最新版をダウンロード](https://github.com/nep76/xorcrypt/releases/latest)
 
 ### Supported platform
-* Windows
+* Windows 10 以降
 * Linux
 
 ## Build
@@ -59,7 +59,7 @@ mydata1.jpg.xnc
 mydata2.jpg.xnc
 ...
 ```
-このxncファイルを同様にxorcrpytにもう一度渡すとそのまま元のファイルに復元できます。
+このxncファイルを同様にxorcryptにもう一度渡すとそのまま元のファイルに復元できます。
 
 Windowsの右クリックの「送る」から使うことを想定しているので入力ファイルをまとめて渡す形式です。
 

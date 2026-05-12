@@ -1,5 +1,7 @@
 #include "info.h"
 
+#include <stdarg.h>
+
 void _info( FILE *stream, const char *format, ... )
 {
     va_list ap;

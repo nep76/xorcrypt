@@ -12,19 +12,21 @@
 #define XNC_MAX_PASSWD  64 // char
 #define XNC_BUF_SIZE    16777216 //16MB
 
-#define XNC_STRECH_TIMES 1000000
+#define XNC_STRETCH_TIMES 1000000
 #define XNC_SEED_STATE 0xC0DECAFE // ストリームに混ぜる定数 state用
 #define XNC_SEED_KS    0x00C0FFEE // ストリームに混ぜる定数 ks用
 
+#include <limits.h>
 #ifdef _WIN32
 #include <windows.h>
-#define MAX_PATH_LEN MAX_PATH
+#ifndef PATH_MAX
+#define PATH_MAX MAX_PATH
+#endif
 #define ftell64 _ftelli64
 #define xnc_be64( x ) _byteswap_uint64( x )
 #define xnc_be32( x ) _byteswap_ulong( x )
 #else
 // そのうち
-#define MAX_PATH_LEN PATH_MAX
 #define ftell64 ftello
 #define xnc_be64( x ) htobe64( x )
 #define xnc_be32( x ) htobe32( x )
@@ -34,10 +36,10 @@
 #error "XNC_BUF_SIZE must be a multiple of 32"
 #endif
 
-#define XNC_F_AUTODETECT 0x00000001
-#define XNC_F_VERBOSE    0x00000002
-#define XNC_F_OVERWRITE  0x00000004
-#define XNC_F_NO_STRECH  0x00000008
+#define XNC_F_AUTODETECT  0x00000001
+#define XNC_F_VERBOSE     0x00000002
+#define XNC_F_OVERWRITE   0x00000004
+#define XNC_F_NO_STRETCH  0x00000008
 
 struct XncContext;
 
@@ -82,7 +84,10 @@ struct XncContext {
     uint32_t flags;
     char *ext;
     char *outdir;
-    char *passwd;
+    struct {
+        char *string;
+        size_t length;
+    } passwd;
     unsigned char *buf;
 };
 

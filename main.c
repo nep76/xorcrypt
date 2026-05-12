@@ -29,7 +29,7 @@ static void _show_progress( uint64_t cur, uint64_t max )
 // パスをディレクトリとファイル名に分けて正規化
 static int _get_dir_and_name_by_path( const char *src, char *dst_dir, char *dst_name, size_t max_len )
 {
-    char buf[MAX_PATH_LEN], *dst, *name = NULL;
+    char buf[PATH_MAX], *dst, *name = NULL;
     size_t cnt = 0;
 
     if( max_len < 1 ) return 0;
@@ -82,21 +82,21 @@ static int _get_dir_and_name_by_path( const char *src, char *dst_dir, char *dst_
 // 終端にNULLを書きこまない
 void xnc_salt_seed_gen( unsigned char *buf, size_t len )
 {
-    while( len-- ) *buf = rand() & 0xFF;
+    while( len-- ) *buf++ = rand() & 0xFF;
 }
 
 void xnc_create_salt( struct XncContext *xnc, unsigned char *output, size_t len )
 {
-    XNC_HASH_CONTEXT( xnc );
+    XNC_HASH_SUPPRESS_UNUSED_WARN( xnc );
 
-    xnc_salt_seed_gen( output, sizeof( len ) );
+    xnc_salt_seed_gen( output, len );
     hash_sha256( xnc, output, len, output );
 }
 
 size_t xnc_read_salt( unsigned char *output, size_t len, FILE *fp )
 {
     fseek( fp, -( len ), SEEK_END );
-    return fread( output, 1, len, fp );
+    return (size_t)(fread( output, 1, len, fp ) / len);
 }
 
 void xnc_write_salt( const unsigned char *salt, size_t len, FILE *fp )
@@ -131,7 +131,7 @@ int xnc_xor_conv( struct XncContext *xnc, FILE *src, uint64_t fsize, FILE *dst, 
             src
         );
         if( ! read_bytes ){
-            einfo( "\nFailed to read source file in converting." );
+            einfo( "\nFailed to read source file while converting." );
             return 0;
         }
 
@@ -140,7 +140,7 @@ int xnc_xor_conv( struct XncContext *xnc, FILE *src, uint64_t fsize, FILE *dst, 
 
         // 実際の読み出しサイズのみ書きこむ
         if( fwrite( buf, 1, read_bytes, dst ) != read_bytes ){
-            einfo( "\nFailed to write output file in coverting." );
+            einfo( "\nFailed to write output file while converting." );
             return 0;
         }
         progress += read_bytes;
@@ -171,19 +171,19 @@ static int parse_args( struct XncContext *xnc, int argc, char *argv[] )
                 for( int i = 0; optarg[i] != '\0'; i++ ) optarg[i] = tolower( optarg[i] );
                 xnc->algo.name = optarg;
                 break;
-            case 'p': xnc->passwd = optarg;          break;
+            case 'p': xnc->passwd.string = optarg;   break;
             case 'o': xnc->outdir = optarg;          break;
             case 'f': xnc->flags |= XNC_F_OVERWRITE; break;
             case 'v': xnc->flags |= XNC_F_VERBOSE;   break;
             case 'x':
                 if( optarg[0] != '\0' ) xnc->ext = optarg;
                 break;
+            case 'n':
+                xnc->flags |= XNC_F_NO_STRETCH;
+                break;
             default:
                 einfof( "Invalid argument: %c\n", opt );
                 return -1;
-            case 'n':
-                xnc->flags |= XNC_F_NO_STRECH;
-                break;
         }
     }
 
@@ -199,7 +199,18 @@ static int parse_args( struct XncContext *xnc, int argc, char *argv[] )
     if( ! xnc->ext ) xnc->ext = XNC_DEFAULT_EXT;
 
     // パスワードが空文字列ならなし
-    if( xnc->passwd && xnc->passwd[0] == '\0' ) xnc->passwd = NULL;
+    if( xnc->passwd.string ){
+        if( xnc->passwd.string[0] == '\0' ){
+            xnc->passwd.length = 0;
+            xnc->passwd.string = NULL;
+        } else{
+            xnc->passwd.length = strlen( xnc->passwd.string );
+            if( xnc->passwd.length > XNC_MAX_PASSWD ){
+                xnc->passwd.length = XNC_MAX_PASSWD;
+                xnc->passwd.string[XNC_MAX_PASSWD - 1] = '\0';
+            }
+        }
+    }
 
     // 変換アルゴリズムを特定
     if( ! xnc->algo.name || strcmp( xnc->algo.name, "xor" ) == 0 ){
@@ -222,8 +233,8 @@ static int parse_args( struct XncContext *xnc, int argc, char *argv[] )
 int main( int argc, char *argv[] )
 {
     int rv = 0, args_offset, store_len;
-    char src_path[MAX_PATH_LEN], dst_path[MAX_PATH_LEN];
-    char path_dir[MAX_PATH_LEN], path_file[MAX_PATH_LEN];
+    char src_path[PATH_MAX], dst_path[PATH_MAX];
+    char path_dir[PATH_MAX], path_file[PATH_MAX];
     char *dot, *outdir;
     FILE *src = NULL, *dst = NULL;
     int64_t src_size;
@@ -235,7 +246,7 @@ int main( int argc, char *argv[] )
     args_offset = parse_args( &xnc, argc, argv );
     if( args_offset < 0 ){
         char *name;
-        if( _get_dir_and_name_by_path( argv[0], path_dir, path_file, MAX_PATH_LEN ) ){
+        if( _get_dir_and_name_by_path( argv[0], path_dir, path_file, PATH_MAX ) ){
             name = path_file;
         } else{
             name = XNC_NAME;
@@ -250,7 +261,7 @@ int main( int argc, char *argv[] )
     srand( (unsigned int)time( NULL ) ^ ( (unsigned int)clock() << 16 ) );
 
     for( int offset = args_offset; offset < argc ; offset++ ){
-        if( ! _get_dir_and_name_by_path( argv[offset], path_dir, path_file, MAX_PATH_LEN ) ){
+        if( ! _get_dir_and_name_by_path( argv[offset], path_dir, path_file, PATH_MAX ) ){
             einfof( "Failed to parse source path strings: %s", argv[offset] );
             goto NEXT;
         }
@@ -260,8 +271,8 @@ int main( int argc, char *argv[] )
             goto NEXT;
         }
 
-        store_len = snprintf( src_path, MAX_PATH_LEN, "%s/%s", path_dir, path_file );
-        if( store_len >= MAX_PATH_LEN ){
+        store_len = snprintf( src_path, PATH_MAX, "%s/%s", path_dir, path_file );
+        if( store_len >= PATH_MAX ){
             einfo( "Source file path is too long." );
             goto NEXT;
         }
@@ -293,39 +304,39 @@ int main( int argc, char *argv[] )
         src_size = ftell64( src );
 
         // 処理に必要な出力パスを取得
-        if( xnc.mode == XNC_ENCODE ){
-            store_len = snprintf( dst_path, MAX_PATH_LEN, "%s/%s.%s", outdir, path_file, xnc.ext );
-            if( store_len >= MAX_PATH_LEN ){
-                einfo( "Filename too long." );
-                goto NEXT;
-            }
-        } else if( xnc.mode == XNC_DECODE ){
-            if( dot ) *dot = '\0';
+        switch( xnc.mode ){
+            case XNC_ENCODE:
+                store_len = snprintf( dst_path, PATH_MAX, "%s/%s.%s", outdir, path_file, xnc.ext );
+                if( store_len >= PATH_MAX ){
+                    einfo( "Filename too long." );
+                    goto NEXT;
+                }
+                break;
+            case XNC_DECODE:
+                if( dot ) *dot = '\0';
 
-            if( src_size < XNC_HASH_SIZE ){
-                einfo( "File size is too small. skipped.");
-                goto NEXT;
-            }
+                if( src_size < XNC_HASH_SIZE ){
+                    einfo( "File is too small. Skipped.");
+                    goto NEXT;
+                }
 
-            store_len = snprintf( dst_path, MAX_PATH_LEN, "%s/%s", outdir, path_file );
-             if( store_len >= MAX_PATH_LEN ){
-                einfo( "Filename too long." );
-                goto NEXT;
-            }
-        } else{
-            einfo( "GO DEBUG DUDE\n" );
-            goto NEXT;
+                store_len = snprintf( dst_path, PATH_MAX, "%s/%s", outdir, path_file );
+                if( store_len >= PATH_MAX ){
+                    einfo( "Filename too long." );
+                    goto NEXT;
+                }
+                break;
         }
 
         // エラーチェック
         if( strcasecmp( src_path, dst_path ) == 0 ){
-            einfo( "Source file is same as output file. skipped." );
+            einfo( "Source and output paths are the same. Skipped." );
             goto NEXT;
         }
 
         infof( &xnc, "Output file: %s", dst_path );
         if( access( dst_path, F_OK ) == 0 && ! ( xnc.flags & XNC_F_OVERWRITE ) ){
-            einfof( "Output path is already exists: %s", dst_path );
+            einfof( "Output path already exists: %s", dst_path );
             goto NEXT;
         }
 
@@ -340,7 +351,7 @@ int main( int argc, char *argv[] )
         xnc.algo.func( &xnc, src, src_size, dst );
 
         if( ferror( src ) || ferror( dst ) ){
-            einfo( "Some error occured. skipped.");
+            einfo( "Some error occurred. Skipped.");
             fclose( dst );
             remove( dst_path );
             goto NEXT;
