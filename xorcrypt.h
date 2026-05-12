@@ -4,7 +4,7 @@
 #define UNUSED( v ) ((void)v)
 
 #define XNC_NAME    "xorcrypt"
-#define XNC_VERSION "260509-01"
+#define XNC_VERSION "260509-02"
 
 #include "main.h"
 #include "hash.h"
