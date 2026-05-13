@@ -67,7 +67,7 @@ void _hash_sha256( const unsigned char *msg,
     }
 }
 #else
-void _hash_sha256( unsigned char *msg,
+INLINE void _hash_sha256( unsigned char *msg,
                   size_t len,
                   unsigned char *output )
 {
@@ -91,7 +91,7 @@ void _hash_sha256( unsigned char *msg,
         exit( 1 );
 }
 
-void _hash_sha256hmac( unsigned char *msg,
+INLINE void _hash_sha256hmac( unsigned char *msg,
                       size_t msg_len,
                       unsigned char *key,
                       size_t key_len,
