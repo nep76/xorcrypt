@@ -83,11 +83,12 @@ static void create_initial_state( struct XncContext *xnc, unsigned char *salt, s
     hash_sha256hmac( xnc, (unsigned char *)&msg, sizeof( msg ), stretch.state, sizeof( stretch.state ), c->state );
 }
 
-int seed_xor( struct XncContext *xnc, FILE *src, uint64_t src_size, FILE *dst )
+int seed_xor( struct XncContext *xnc, FILE *src, off_t src_size, FILE *dst )
 {
     struct XncAlgoParams p;
     struct XncSeedXor    c;
     unsigned char salt[XNC_SALT_SIZE];
+    int rv;
 
     p.xor = algo_seed_xor;
     p.ctx = &c;
@@ -107,11 +108,13 @@ int seed_xor( struct XncContext *xnc, FILE *src, uint64_t src_size, FILE *dst )
     // マスターハッシュを作成
     create_initial_state( xnc, salt, &c );
 
-    xnc_xor_conv( xnc, src, src_size, dst, &p );
+    rv = xnc_xor_conv( xnc, src, src_size, dst, &p );
 
-    if( xnc->mode == XNC_ENCODE ){
-        xnc_write_salt( salt, sizeof( salt ), dst );
+    if( rv == 0 &&  xnc->mode == XNC_ENCODE ){
+        if( ! xnc_write_salt( salt, sizeof( salt ), dst ) ){
+            rv |= 0x1000;
+        }
     }
 
-    return 1;
+    return rv;
 }

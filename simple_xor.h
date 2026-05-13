@@ -9,6 +9,6 @@ struct XncSimpleXor {
     unsigned char hash[XNC_HASH_SIZE];
 };
 
-int simple_xor( struct XncContext *xnc, FILE *src, uint64_t src_size, FILE *dst );
+int simple_xor( struct XncContext *xnc, FILE *src, off_t src_size, FILE *dst );
 
 #endif

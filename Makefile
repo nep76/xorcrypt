@@ -1,5 +1,5 @@
 CC      ?= gcc
-CFLAGS  ?= -O3 -ffunction-sections -fdata-sections -Wall -Wextra -Werror
+CFLAGS  ?= -O3 -D_FILE_OFFSET_BITS=64 -ffunction-sections -fdata-sections -Wall -Wextra -Werror
 LDFLAGS ?= -s -Wl,--gc-sections
 LIBS    =
 
@@ -35,7 +35,7 @@ $(TARGET): $(OBJS)
 	$(CC) $(LDFLAGS) $(OBJS) -o $(TARGET) $(LIBS)
 
 clean:
-	rm -f $(OBJS) MAKETEST.$(TARGET).*
+	rm -f $(OBJS) MAKETEST.*
 
 binclean:
 	rm -f $(TARGET) $(TARGET).exe

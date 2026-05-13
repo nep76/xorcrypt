@@ -18,12 +18,13 @@ static int algo_simple_xor( struct XncContext *xnc, unsigned char *restrict buf,
     return 1;
 }
 
-int simple_xor( struct XncContext *xnc, FILE *src, uint64_t src_size, FILE *dst )
+int simple_xor( struct XncContext *xnc, FILE *src, off_t src_size, FILE *dst )
 {
     struct XncAlgoParams p;
     struct XncSimpleXor  c;
     unsigned char salt[XNC_SALT_SIZE];
-
+    int rv;
+    
     p.xor = algo_simple_xor;
     p.ctx = &c;
 
@@ -54,11 +55,13 @@ int simple_xor( struct XncContext *xnc, FILE *src, uint64_t src_size, FILE *dst 
     info_dumphex( xnc, "Salt", (unsigned char *)c.hash, sizeof( c.hash ) );
     
     // 変換
-    xnc_xor_conv( xnc, src, src_size, dst, &p );
+    rv = xnc_xor_conv( xnc, src, src_size, dst, &p );
 
-    if( xnc->mode == XNC_ENCODE ){
-        xnc_write_salt( salt, sizeof( salt ), dst );
+    if( rv == 0 && xnc->mode == XNC_ENCODE ){
+        if( ! xnc_write_salt( salt, sizeof( salt ), dst ) ){
+            rv |= 0x1000;
+        }
     }
 
-    return 1;
+    return rv;
 }

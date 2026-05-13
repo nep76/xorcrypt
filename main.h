@@ -3,7 +3,7 @@
 
 #include <stdio.h>
 #include <stdint.h>
-#include <sys/file.h>
+#include <sys/types.h>
 
 #define XNC_DEFAULT_EXT "xnc"
 
@@ -22,12 +22,10 @@
 #ifndef PATH_MAX
 #define PATH_MAX MAX_PATH
 #endif
-#define ftell64 _ftelli64
 #define xnc_be64( x ) _byteswap_uint64( x )
 #define xnc_be32( x ) _byteswap_ulong( x )
 #else
 // そのうち
-#define ftell64 ftello
 #define xnc_be64( x ) htobe64( x )
 #define xnc_be32( x ) htobe32( x )
 #endif
@@ -44,7 +42,7 @@
 struct XncContext;
 
 typedef int (*XncXorFunc)( struct XncContext*, unsigned char * restrict, size_t, void* );
-typedef int (*XncAlgoFunc)( struct XncContext*, FILE*, uint64_t, FILE* );
+typedef int (*XncAlgoFunc)( struct XncContext*, FILE*, off_t, FILE* );
 
 enum XncRunMode {
     XNC_DECODE,
@@ -91,10 +89,10 @@ struct XncContext {
     unsigned char *buf;
 };
 
-void   xnc_salt_seed_gen( unsigned char *buf, size_t len );
-void   xnc_create_salt( struct XncContext *xnc, unsigned char *output, size_t len );
-size_t xnc_read_salt( unsigned char *output, size_t len, FILE *fp );
-void   xnc_write_salt( const unsigned char *salt, size_t len, FILE *fp );
-int    xnc_xor_conv( struct XncContext *xnc, FILE *src, uint64_t fsize, FILE *dst, struct XncAlgoParams *p );
+void xnc_salt_seed_gen( unsigned char *buf, size_t len );
+void xnc_create_salt( struct XncContext *xnc, unsigned char *output, size_t len );
+int  xnc_read_salt( unsigned char *output, size_t len, FILE *fp );
+int  xnc_write_salt( const unsigned char *salt, size_t len, FILE *fp );
+int  xnc_xor_conv( struct XncContext *xnc, FILE *src, off_t fsize, FILE *dst, struct XncAlgoParams *p );
 
 #endif
