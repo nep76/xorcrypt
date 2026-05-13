@@ -1,7 +1,6 @@
 #ifndef SIMPLE_XOR
 #define SIMPLE_XOR
 
-#define XNC_HASH_PERMIT_INLINE
 #include "xorcrypt.h"
 
 struct XncSimpleXor {

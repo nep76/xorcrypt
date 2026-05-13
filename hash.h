@@ -23,20 +23,54 @@ void _hash_sha256( const unsigned char *msg, DWORD msg_len, unsigned char *key, 
 #include <openssl/hmac.h>
 #include <openssl/evp.h>
 #include <openssl/err.h>
+#include "info.h"
 
 #define INLINE
-
 #ifdef XNC_HASH_PERMIT_INLINE
 #undef INLINE
-#define INLINE inline
+#define INLINE static inline
 #endif
 
 #define hash_init( p_xnc )
 #define hash_destroy( p_xnc )
-INLINE void _hash_sha256( unsigned char *msg, size_t len, unsigned char *output );
-INLINE void _hash_sha256hmac( unsigned char *msg, size_t msg_len, unsigned char *key, size_t key_len, unsigned char *output );
 #define hash_sha256( p_xnc, msg, len, dst ) _hash_sha256( msg, len, dst )
 #define hash_sha256hmac( p_xnc, msg, msg_len, key, key_len, dst ) _hash_sha256hmac( msg, msg_len, key, key_len, dst )
+
+void _hash_sha256( unsigned char *msg,
+                  size_t len,
+                  unsigned char *output )
+{
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    
+    if(
+        ctx == NULL ||
+        ! EVP_DigestInit_ex( ctx, EVP_sha256(), NULL ) ||
+        ! EVP_DigestUpdate( ctx, msg, len )            ||
+        ! EVP_DigestFinal_ex( ctx, output, NULL )
+    ){
+        goto ABORT;
+    }
+    EVP_MD_CTX_free( ctx );
+
+    return;
+
+    ABORT:
+        einfof( "Failed to calculate SHA256. OpenSSL says: %s", ERR_error_string( ERR_get_error(), NULL ) );
+        EVP_MD_CTX_free( ctx );
+        exit( 1 );
+}
+
+void _hash_sha256hmac( unsigned char *msg,
+                      size_t msg_len,
+                      unsigned char *key,
+                      size_t key_len,
+                      unsigned char *output )
+{
+    if( HMAC( EVP_sha256(), key, key_len, msg, msg_len, output, NULL ) == NULL ){
+        einfof( "Failed to calculate SHA256. OpenSSL says: %s", ERR_error_string( ERR_get_error(), NULL ) );
+        exit( 1 );
+    }
+}
 
 #endif
 
