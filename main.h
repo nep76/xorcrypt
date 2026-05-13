@@ -2,8 +2,11 @@
 #define MAIN_H
 
 #include <stdio.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <sys/types.h>
+
+#include "xorcrypt.h"
 
 #define XNC_DEFAULT_EXT "xnc"
 
@@ -34,12 +37,12 @@
 #error "XNC_BUF_SIZE must be a multiple of 32"
 #endif
 
+#include "hash.h"
+
 #define XNC_F_AUTODETECT  0x00000001
 #define XNC_F_VERBOSE     0x00000002
 #define XNC_F_OVERWRITE   0x00000004
 #define XNC_F_NO_STRETCH  0x00000008
-
-struct XncContext;
 
 typedef int (*XncXorFunc)( struct XncContext*, unsigned char * restrict, size_t, void* );
 typedef int (*XncAlgoFunc)( struct XncContext*, FILE*, off_t, FILE* );
@@ -59,26 +62,10 @@ struct XncAlgo {
     XncAlgoFunc func;
 };
 
-#ifdef _WIN32
-struct XncBCryptPvd{
-    BCRYPT_ALG_HANDLE h_alg;
-    PUCHAR hashobj;
-    DWORD hashobj_size;
-};
-
-struct XncHashPvd {
-    struct XncBCryptPvd sha256;
-    struct XncBCryptPvd hmac_sha256;
-};
-#endif
-
-
 struct XncContext {
     struct XncAlgo algo;
-#ifdef _WIN32
-    struct XncHashPvd hash;
-#endif
     enum XncRunMode mode;
+    struct XncHash *hash;
     uint32_t flags;
     char *ext;
     char *outdir;

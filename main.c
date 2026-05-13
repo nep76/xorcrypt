@@ -1,5 +1,3 @@
-#include "xorcrypt.h"
-
 #include <string.h>
 #include <ctype.h>
 #include <time.h>
@@ -13,7 +11,6 @@
 #include <unistd.h>
 #endif
 
-#include "hash.h"
 #include "info.h"
 
 #include "simple_xor.h"
@@ -88,8 +85,6 @@ void xnc_salt_seed_gen( unsigned char *buf, size_t len )
 
 void xnc_create_salt( struct XncContext *xnc, unsigned char *output, size_t len )
 {
-    XNC_HASH_SUPPRESS_UNUSED_WARN( xnc );
-
     xnc_salt_seed_gen( output, len );
     hash_sha256( xnc, output, len, output );
 }
@@ -247,8 +242,6 @@ int main( int argc, char *argv[] )
 
     struct XncContext xnc = { 0 };
     
-    hash_init( &xnc );
-
     args_offset = parse_args( &xnc, argc, argv );
     if( args_offset < 0 ){
         char *name;
@@ -261,10 +254,16 @@ int main( int argc, char *argv[] )
         einfof( "Usage: %s [-ednfv] [-a xor|seed-xor] [-p passwd] [-o dir] [-x ext] file [file ...]", name );
         return 1;
     }
-
     xnc.buf = st_xnc_buffer;
 
+    hash_init( &xnc );
     srand( (unsigned int)time( NULL ) ^ ( (unsigned int)clock() << 16 ) );
+
+#ifdef _WIN32
+    hash_sha256_ready( &xnc,
+                       alloca( hash_get_sha256_workspace_size( &xnc ) ),
+                       alloca( hash_get_sha256hmac_workspace_size( &xnc ) ) );
+#endif
 
     for( int offset = args_offset; offset < argc ; offset++ ){
         src = NULL;
