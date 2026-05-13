@@ -8,8 +8,6 @@ static int algo_seed_xor( struct XncContext *xnc, unsigned char *restrict buf, s
     unsigned char ks[XNC_HASH_SIZE];
     struct XncSeedXorMsg msg;
 
-    XNC_HASH_SUPPRESS_UNUSED_WARN( xnc );
-
     for( size_t i = 0; i < blocks; i++ ){
         msg.label_be = xnc_be32( XNC_SEED_KS );
         msg.cnt_be   = xnc_be64( c->cnt );
@@ -37,8 +35,6 @@ static void create_initial_state( struct XncContext *xnc, unsigned char *salt, s
     uint32_t label_be = xnc_be32( XNC_SEED_STATE );
     uint32_t i = 0;
     struct XncSeedXorMsg msg;
-
-    XNC_HASH_SUPPRESS_UNUSED_WARN( xnc );
 
     // [HASH] || [i] || [SALT] || [PASSWD]
     struct {

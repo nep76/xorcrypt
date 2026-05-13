@@ -1,9 +1,12 @@
 CC      ?= gcc
-CFLAGS  ?= -O3 -D_FILE_OFFSET_BITS=64 -ffunction-sections -fdata-sections -Wall -Wextra -Werror
-LDFLAGS ?= -s -Wl,--gc-sections
+CFLAGS  ?= -O3 -flto=auto -D_FILE_OFFSET_BITS=64 -ffunction-sections -fdata-sections -Wall -Wextra -Werror
+LDFLAGS ?= -O3 -flto=auto -s -Wl,--gc-sections
 LIBS    =
 
 SUFFIX =
+
+SRCS = $(wildcard *.c)
+OBJS = $(SRCS:.c=.o)
 
 ifdef WITH_OPTINFO
 	CFLAGS += -fopt-info
@@ -19,13 +22,12 @@ ifdef WITH_NATIVE
 endif
 
 ifeq ($(OS), Windows_NT)
+	SRCS += hash/hash_bcrypt.c
 	LIBS += -lbcrypt
 else
+	SRCS += hash/hash_openssl.c
 	LIBS += -lcrypto
 endif
-
-SRCS = $(wildcard *.c)
-OBJS = $(SRCS:.c=.o)
 
 TARGET = xorcrypt$(SUFFIX)
 
