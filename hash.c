@@ -2,11 +2,6 @@
 
 #ifdef _WIN32
 #include <bcrypt.h>
-#else
-#include <openssl/sha.h>
-#include <openssl/hmac.h>
-#include <openssl/evp.h>
-#include <openssl/err.h>
 #endif
 
 #ifdef _WIN32
