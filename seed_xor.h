@@ -14,6 +14,6 @@ struct XncSeedXorMsg{
     uint64_t cnt_be;
 } __attribute__((packed));
 
-int seed_xor( struct XncContext *xnc, FILE *src, uint64_t src_size, FILE *dst );
+int seed_xor( struct XncContext *xnc, FILE *src, off_t src_size, FILE *dst );
 
 #endif

@@ -20,9 +20,9 @@
 
 static unsigned char st_xnc_buffer[XNC_BUF_SIZE] __attribute__((section(".bss")));
 
-static void _show_progress( uint64_t cur, uint64_t max )
+static void _show_progress( off_t cur, off_t max )
 {
-    printf( "\rProgress: %3d%% [%" PRIu64 " / %" PRIu64 " bytes]", (int)( cur * 100 / max ), cur, max );
+    printf( "\rProgress: %3d%% [%" PRId64 " / %" PRId64 " bytes]", (int)( cur * 100 / max ), (int64_t)cur, (int64_t)max );
     fflush( stdout );
 }
 
@@ -93,27 +93,33 @@ void xnc_create_salt( struct XncContext *xnc, unsigned char *output, size_t len 
     hash_sha256( xnc, output, len, output );
 }
 
-size_t xnc_read_salt( unsigned char *output, size_t len, FILE *fp )
+int xnc_read_salt( unsigned char *output, size_t len, FILE *fp )
 {
-    fseek( fp, -( len ), SEEK_END );
-    return (size_t)(fread( output, 1, len, fp ) / len);
+    size_t rv = 0;
+    if( fseek( fp, -( len ), SEEK_END ) == 0 ){
+        rv = fread( output, 1, len, fp );
+    }
+    return (int)( rv / len );
 }
 
-void xnc_write_salt( const unsigned char *salt, size_t len, FILE *fp )
+int xnc_write_salt( const unsigned char *salt, size_t len, FILE *fp )
 {
-    fseek( fp, 0, SEEK_END );
-    fwrite( salt, 1, len, fp );
+    size_t rv = 0;
+    if( fseek( fp, 0, SEEK_END ) == 0 ){
+        rv = fwrite( salt, 1, len, fp );
+    }
+    return (int)( rv / len );
 }
 
-int xnc_xor_conv( struct XncContext *xnc, FILE *src, uint64_t fsize, FILE *dst, struct XncAlgoParams *p )
+// success = return 0
+int xnc_xor_conv( struct XncContext *xnc, FILE *src, off_t fsize, FILE *dst, struct XncAlgoParams *p )
 {
     unsigned char *buf = st_xnc_buffer;
-    uint64_t progress = 0;
+    off_t progress = 0;
     size_t read_bytes;
     clock_t clock_now, clock_last_notice = 0;
 
-    fseek( src, 0, SEEK_SET );
-    fseek( dst, 0, SEEK_SET );
+    if( fseek( src, 0, SEEK_SET ) != 0 || fseek( dst, 0, SEEK_SET ) != 0 ) return 0x1;
 
     while( progress < fsize ){
         // 進捗表示
@@ -132,7 +138,7 @@ int xnc_xor_conv( struct XncContext *xnc, FILE *src, uint64_t fsize, FILE *dst, 
         );
         if( ! read_bytes ){
             einfo( "\nFailed to read source file while converting." );
-            return 0;
+            return 0x2;
         }
 
         // 必ず32バイト境界で読みだしたことにする
@@ -141,7 +147,7 @@ int xnc_xor_conv( struct XncContext *xnc, FILE *src, uint64_t fsize, FILE *dst, 
         // 実際の読み出しサイズのみ書きこむ
         if( fwrite( buf, 1, read_bytes, dst ) != read_bytes ){
             einfo( "\nFailed to write output file while converting." );
-            return 0;
+            return 0x4;
         }
         progress += read_bytes;
     }
@@ -151,7 +157,7 @@ int xnc_xor_conv( struct XncContext *xnc, FILE *src, uint64_t fsize, FILE *dst, 
         printf( "\n" );
     }
 
-    return 1;
+    return 0;
 }
 
 static int parse_args( struct XncContext *xnc, int argc, char *argv[] )
@@ -236,7 +242,7 @@ int main( int argc, char *argv[] )
     char path_dir[PATH_MAX], path_file[PATH_MAX];
     char *dot, *outdir;
     FILE *src = NULL, *dst = NULL;
-    int64_t src_size;
+    off_t src_size;
 
     struct XncContext xnc = { 0 };
     
@@ -260,6 +266,8 @@ int main( int argc, char *argv[] )
     srand( (unsigned int)time( NULL ) ^ ( (unsigned int)clock() << 16 ) );
 
     for( int offset = args_offset; offset < argc ; offset++ ){
+        src = NULL;
+        dst = NULL;
         if( ! _get_dir_and_name_by_path( argv[offset], path_dir, path_file, PATH_MAX ) ){
             einfof( "Failed to parse source path strings: %s", argv[offset] );
             goto NEXT;
@@ -299,8 +307,8 @@ int main( int argc, char *argv[] )
         }
 
         // ファイルサイズを取得
-        fseek( src, 0, SEEK_END );
-        src_size = ftell64( src );
+        if( fseek( src, 0, SEEK_END ) < 0 )    goto NEXT;
+        if( ( src_size = ftello( src ) ) < 0 ) goto NEXT;
 
         // 処理に必要な出力パスを取得
         switch( xnc.mode ){
@@ -314,7 +322,8 @@ int main( int argc, char *argv[] )
             case XNC_DECODE:
                 if( dot ) *dot = '\0';
 
-                if( src_size < XNC_HASH_SIZE ){
+                // ハッシュサイズ+1バイトでもデータがない場合はxncファイルではない
+                if( src_size < XNC_HASH_SIZE + 1 ){
                     einfo( "File is too small. Skipped.");
                     goto NEXT;
                 }
@@ -339,29 +348,36 @@ int main( int argc, char *argv[] )
             goto NEXT;
         }
 
-        dst = fopen( dst_path, "wb" );
-        if( ! dst ){
-            einfof( "Failed to open output file: %s", dst_path );
-            goto NEXT;
-        }
-
+        
         // 変換
-        infof( &xnc, "Processing %s ...", xnc.algo.name );
-        xnc.algo.func( &xnc, src, src_size, dst );
+        if( src_size > 0 ){
+            dst = fopen( dst_path, "wb" );
+            if( ! dst ){
+                einfof( "Failed to open output file: %s", dst_path );
+                goto NEXT;
+            }
 
-        if( ferror( src ) || ferror( dst ) ){
-            einfo( "Some error occurred. Skipped.");
+            infof( &xnc, "Processing %s ...", xnc.algo.name );
+            if(
+                xnc.algo.func( &xnc, src, src_size, dst ) != 0 ||
+                ferror( src ) ||
+                ferror( dst )
+            ){
+                fclose( dst );
+                remove( dst_path );
+                goto NEXT;
+            }
             fclose( dst );
-            remove( dst_path );
-            goto NEXT;
         } else{
-            fclose( dst );
-            fclose( src );
+            einfo( "Source file is empty. Skipped." );
         }
+
+        fclose( src );
 
         continue;
 
         NEXT:
+            einfo( "Some error occurred. Skipped.");
             rv |= 1;
             if( src ) fclose( src );
     }
