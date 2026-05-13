@@ -35,7 +35,7 @@ $(TARGET): $(OBJS)
 	$(CC) $(LDFLAGS) $(OBJS) -o $(TARGET) $(LIBS)
 
 clean:
-	rm -f $(OBJS) MAKETEST.$(TARGET).*
+	rm -f $(OBJS) MAKETEST.*
 
 binclean:
 	rm -f $(TARGET) $(TARGET).exe

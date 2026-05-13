@@ -20,13 +20,11 @@ void _hash_sha256( const unsigned char *msg, DWORD msg_len, unsigned char *key, 
 #define XNC_HASH_SUPPRESS_UNUSED_WARN( xnc ) UNUSED( xnc )
 
 #define INLINE
-#ifdef XNC_PERMIT_INLINE
+
+#ifdef XNC_HASH_PERMIT_INLINE
 #undef INLINE
 #define INLINE static inline
 #endif
-
-#include <openssl/sha.h>
-#include <openssl/hmac.h>
 
 #define hash_init( p_xnc )
 #define hash_destroy( p_xnc )
