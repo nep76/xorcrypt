@@ -19,11 +19,16 @@ void _hash_sha256( const unsigned char *msg, DWORD msg_len, unsigned char *key, 
 
 #define XNC_HASH_SUPPRESS_UNUSED_WARN( xnc ) UNUSED( xnc )
 
+#include <openssl/sha.h>
+#include <openssl/hmac.h>
+#include <openssl/evp.h>
+#include <openssl/err.h>
+
 #define INLINE
 
 #ifdef XNC_HASH_PERMIT_INLINE
 #undef INLINE
-#define INLINE static inline
+#define INLINE inline
 #endif
 
 #define hash_init( p_xnc )
