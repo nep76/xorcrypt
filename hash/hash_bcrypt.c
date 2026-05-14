@@ -7,7 +7,6 @@
 
 struct XncBCryptPvd{
     BCRYPT_ALG_HANDLE h_alg;
-    PUCHAR hashobj;
     DWORD hashobj_size;
 };
 
@@ -28,7 +27,9 @@ static void _sha256( const unsigned char *msg,
     BCRYPT_HASH_HANDLE h_hash;
     NTSTATUS rv = 0;
 
-    rv = BCryptCreateHash( pvd->h_alg, &(h_hash), pvd->hashobj, pvd->hashobj_size, key, key_len, 0 );
+    PUCHAR hashobj = alloca( pvd->hashobj_size );
+
+    rv = BCryptCreateHash( pvd->h_alg, &(h_hash), hashobj, pvd->hashobj_size, key, key_len, 0 );
     if( rv == 0 ){
         rv |= BCryptHashData( h_hash, (PUCHAR)msg, msg_len, 0 );
         rv |= BCryptFinishHash( h_hash, output, XNC_HASH_SIZE, 0 );
@@ -69,22 +70,6 @@ void hash_destroy( struct XncContext *xnc )
     memset( xnc->hash, 0, sizeof( struct XncHash ) );
 
     xnc->hash = NULL;
-}
-
-size_t hash_get_sha256_workspace_size( struct XncContext *xnc )
-{
-    return xnc->hash->sha256.hashobj_size;
-}
-
-size_t hash_get_sha256hmac_workspace_size( struct XncContext *xnc )
-{
-    return xnc->hash->hmac_sha256.hashobj_size;
-}
-
-void hash_sha256_ready( struct XncContext *xnc, void *sha_work, void *hmac_work )
-{
-    xnc->hash->sha256.hashobj = sha_work;
-    xnc->hash->hmac_sha256.hashobj = hmac_work;
 }
 
 void hash_sha256( struct XncContext *xnc, const unsigned char *msg, size_t len, unsigned char *output )

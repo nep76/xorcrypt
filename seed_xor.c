@@ -2,16 +2,30 @@
 
 #include <string.h>
 
+struct XncSeedXor{
+    unsigned char state[XNC_HASH_SIZE];
+    uint64_t cnt;
+};
+
+struct XncSeedXorMsg{
+    uint32_t label_be;
+    uint64_t cnt_be;
+} __attribute__((packed));
+
 static int algo_seed_xor( struct XncContext *xnc, unsigned char *restrict buf, size_t blocks, void *ctx )
 {
     struct XncSeedXor *c = (struct XncSeedXor *)ctx;
     unsigned char ks[XNC_HASH_SIZE];
-    struct XncSeedXorMsg msg;
+
+    // [LABEL] || [CNT]
+    struct XncSeedXorMsg msg_state, msg_ks;
+
+    msg_ks.label_be    = xnc_be32( XNC_SEED_KS );
+    msg_state.label_be = xnc_be32( XNC_SEED_STATE );
 
     for( size_t i = 0; i < blocks; i++ ){
-        msg.label_be = xnc_be32( XNC_SEED_KS );
-        msg.cnt_be   = xnc_be64( c->cnt );
-        hash_sha256hmac( xnc, (unsigned char *)&msg, sizeof( msg ), c->state, sizeof( c->state ), ks );
+        msg_ks.cnt_be   = xnc_be64( c->cnt );
+        hash_sha256hmac( xnc, (unsigned char *)&msg_ks, sizeof( msg_ks ), c->state, sizeof( c->state ), ks );
 
         for( int j = 0; j < XNC_HASH_SIZE; j++ ){
             buf[j] ^= ks[j];
@@ -19,9 +33,8 @@ static int algo_seed_xor( struct XncContext *xnc, unsigned char *restrict buf, s
         buf += XNC_HASH_SIZE;
 
         c->cnt++;
-        msg.label_be = xnc_be32( XNC_SEED_STATE );
-        msg.cnt_be   = xnc_be64( c->cnt );
-        hash_sha256hmac( xnc, (unsigned char *)&msg, sizeof( msg ), c->state, sizeof( c->state ), c->state ); 
+        msg_state.cnt_be   = xnc_be64( c->cnt );
+        hash_sha256hmac( xnc, (unsigned char *)&msg_state, sizeof( msg_state ), c->state, sizeof( c->state ), c->state ); 
     }
     return 1;
 }
