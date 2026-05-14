@@ -6,7 +6,6 @@ LIBS    =
 SUFFIX =
 
 SRCS = $(wildcard *.c)
-OBJS = $(SRCS:.c=.o)
 
 ifdef WITH_OPTINFO
 	CFLAGS += -fopt-info
@@ -28,6 +27,8 @@ else
 	SRCS += hash/hash_openssl.c
 	LIBS += -lcrypto
 endif
+
+OBJS = $(SRCS:.c=.o)
 
 TARGET = xorcrypt$(SUFFIX)
 

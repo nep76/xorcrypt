@@ -2,6 +2,11 @@
 
 #include <string.h>
 
+struct XncSimpleXor {
+    unsigned char salt[XNC_SALT_SIZE];
+    unsigned char hash[XNC_HASH_SIZE];
+};
+
 static int algo_simple_xor( struct XncContext *xnc, unsigned char *restrict buf, size_t blocks, void *ctx )
 {
     struct XncSimpleXor *c = (struct XncSimpleXor *)ctx;

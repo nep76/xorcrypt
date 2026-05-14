@@ -4,7 +4,7 @@
 #define UNUSED( v ) ((void)v)
 
 #define XNC_NAME    "xorcrypt"
-#define XNC_VERSION "260509-03"
+#define XNC_VERSION "260509-04"
 
 #define XNC_HASH_PERMIT_INLINE
 

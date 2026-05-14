@@ -259,12 +259,6 @@ int main( int argc, char *argv[] )
     hash_init( &xnc );
     srand( (unsigned int)time( NULL ) ^ ( (unsigned int)clock() << 16 ) );
 
-#ifdef _WIN32
-    hash_sha256_ready( &xnc,
-                       alloca( hash_get_sha256_workspace_size( &xnc ) ),
-                       alloca( hash_get_sha256hmac_workspace_size( &xnc ) ) );
-#endif
-
     for( int offset = args_offset; offset < argc ; offset++ ){
         src = NULL;
         dst = NULL;
