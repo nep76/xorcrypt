@@ -3,6 +3,6 @@
 
 #include "xorcrypt.h"
 
-int seed_xor( struct XncContext *xnc, FILE *src, off_t src_size, FILE *dst );
+int seed_xor( const struct Xnc *xnc, struct XncJob *job );
 
 #endif

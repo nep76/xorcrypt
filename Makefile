@@ -21,12 +21,23 @@ ifdef WITH_NATIVE
 endif
 
 ifeq ($(OS), Windows_NT)
-	SRCS += hash/hash_bcrypt.c
+	SRCS += hash/hash_bcrypt.c \
+			thread/thrw_win32.c \
+			thread/mutex_win32.c \
+			thread/sema_win32.c
 	LIBS += -lbcrypt
 else
-	SRCS += hash/hash_openssl.c
-	LIBS += -lcrypto
+	ifdef WITH_STATIC
+		LDFLAGS += -static
+	endif
+	SRCS += hash/hash_openssl.c \
+			thread/thrw_pthread.c \
+			thread/mutex_pthread.c \
+			thread/sema_pthread.c
+	LIBS += -lcrypto -lpthread
 endif
+
+SRCS += thread/queue.c
 
 OBJS = $(SRCS:.c=.o)
 
