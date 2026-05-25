@@ -12,7 +12,7 @@ struct XncSeedXorMsg{
     uint64_t cnt_be;
 } __attribute__((packed));
 
-static int algo_seed_xor( struct XncContext *xnc, unsigned char *restrict buf, size_t blocks, void *ctx )
+static int algo_seed_xor( struct XncHash *hs, unsigned char *restrict buf, size_t blocks, void *ctx )
 {
     struct XncSeedXor *c = (struct XncSeedXor *)ctx;
     unsigned char ks[XNC_HASH_SIZE];
@@ -25,7 +25,7 @@ static int algo_seed_xor( struct XncContext *xnc, unsigned char *restrict buf, s
 
     for( size_t i = 0; i < blocks; i++ ){
         msg_ks.cnt_be   = xnc_be64( c->cnt );
-        hash_sha256hmac( xnc, (unsigned char *)&msg_ks, sizeof( msg_ks ), c->state, sizeof( c->state ), ks );
+        hash_sha256hmac( hs, (unsigned char *)&msg_ks, sizeof( msg_ks ), c->state, sizeof( c->state ), ks );
 
         for( int j = 0; j < XNC_HASH_SIZE; j++ ){
             buf[j] ^= ks[j];
@@ -34,12 +34,15 @@ static int algo_seed_xor( struct XncContext *xnc, unsigned char *restrict buf, s
 
         c->cnt++;
         msg_state.cnt_be   = xnc_be64( c->cnt );
-        hash_sha256hmac( xnc, (unsigned char *)&msg_state, sizeof( msg_state ), c->state, sizeof( c->state ), c->state ); 
+        hash_sha256hmac( hs, (unsigned char *)&msg_state, sizeof( msg_state ), c->state, sizeof( c->state ), c->state ); 
     }
     return 1;
 }
 
-static void create_initial_state( struct XncContext *xnc, unsigned char *salt, struct XncSeedXor *c )
+static void create_initial_state( const struct Xnc *xnc,
+                                  struct XncJob *job,
+                                  unsigned char *salt,
+                                  struct XncSeedXor *c )
 {
     // key_stretchは SHA256 をin-place（入力と出力に同じポインタを指定）で更新するバッファ。
     // CNG/OpenSSLのSHA256は入力を読み終えてから出力を書くためin-placeでも安全。
@@ -66,15 +69,14 @@ static void create_initial_state( struct XncContext *xnc, unsigned char *salt, s
     }
     
     // 初期ハッシュ
-    hash_sha256( xnc, (unsigned char *)&stretch, ( sizeof( stretch ) - sizeof( stretch.passwd ) ) + xnc->passwd.length, stretch.state );
+    hash_sha256( job->hs, (unsigned char *)&stretch, ( sizeof( stretch ) - sizeof( stretch.passwd ) ) + xnc->passwd.length, stretch.state );
     
     // 鍵伸長
     if( ! ( xnc->flags & XNC_F_NO_STRETCH ) ){
-        info( xnc, "Key-stretching..." ) ;
         for( ; i < XNC_STRETCH_TIMES; i++ ){
             stretch.i_be = xnc_be32( i );
             hash_sha256hmac(
-                xnc,
+                job->hs,
                 (unsigned char *)&stretch,
                 sizeof( stretch ) - sizeof( stretch.passwd ) + xnc->passwd.length,
                 stretch.state,
@@ -82,17 +84,15 @@ static void create_initial_state( struct XncContext *xnc, unsigned char *salt, s
                 stretch.state
             );
         }
-    } else{
-        info( xnc, "No-stretch" );
     }
 
     // 初期state
     msg.label_be = label_be;
     msg.cnt_be = xnc_be64( c->cnt );
-    hash_sha256hmac( xnc, (unsigned char *)&msg, sizeof( msg ), stretch.state, sizeof( stretch.state ), c->state );
+    hash_sha256hmac( job->hs, (unsigned char *)&msg, sizeof( msg ), stretch.state, sizeof( stretch.state ), c->state );
 }
 
-int seed_xor( struct XncContext *xnc, FILE *src, off_t src_size, FILE *dst )
+int seed_xor( const struct Xnc *xnc, struct XncJob *job )
 {
     struct XncAlgoParams p;
     struct XncSeedXor    c;
@@ -103,24 +103,24 @@ int seed_xor( struct XncContext *xnc, FILE *src, off_t src_size, FILE *dst )
     p.ctx = &c;
     c.cnt = 0;
 
-    switch( xnc->mode ){
+    switch( job->mode ){
         case XNC_ENCODE:
-            xnc_create_salt( xnc, salt, sizeof( salt ) );
+            xnc_create_salt( job->hs, salt, sizeof( salt ) );
             break;
         case XNC_DECODE:
-            src_size -= xnc_read_salt( salt, sizeof( salt ), src ) * sizeof( salt );
+            job->file.src.size -= xnc_read_salt( salt, sizeof( salt ), job->file.src.fh ) * sizeof( salt );
             break;
     }
 
-    info_dumphex( xnc, "Salt", (unsigned char *)salt, sizeof( salt ) );
+    //info_dumphex( xnc, "Salt", (unsigned char *)salt, sizeof( salt ) );
 
     // マスターハッシュを作成
-    create_initial_state( xnc, salt, &c );
+    create_initial_state( xnc, job, salt, &c );
 
-    rv = xnc_xor_conv( xnc, src, src_size, dst, &p );
+    rv = xnc_xor_conv( xnc, job, &p );
 
-    if( rv == 0 &&  xnc->mode == XNC_ENCODE ){
-        if( ! xnc_write_salt( salt, sizeof( salt ), dst ) ){
+    if( rv == 0 &&  job->mode == XNC_ENCODE ){
+        if( ! xnc_write_salt( salt, sizeof( salt ), job->file.dst.fh ) ){
             rv |= 0x1000;
         }
     }

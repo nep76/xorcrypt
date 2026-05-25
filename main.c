@@ -4,6 +4,7 @@
 #include <inttypes.h>
 #include <stdlib.h>
 #include <getopt.h>
+#include <sys/stat.h>
 
 #ifdef _WIN32
 #include <io.h>
@@ -12,16 +13,62 @@
 #endif
 
 #include "info.h"
-
 #include "simple_xor.h"
 #include "seed_xor.h"
 
-static unsigned char st_xnc_buffer[XNC_BUF_SIZE] __attribute__((section(".bss")));
+struct xnc_file_id {
+    uint64_t vid;
+    uint64_t fid;
+};
 
-static void _show_progress( off_t cur, off_t max )
+// ワイルドカード展開 (Mingw用)
+#if defined(_WIN32) && (defined(__MINGW32__) || defined(__MINGW64__))
+int _dowildcard = 1;
+#endif
+
+static struct Xnc xnc;
+
+#ifdef _WIN32
+#include <sysinfoapi.h>
+#else
+#include <unistd.h>
+#endif
+
+static int _get_cpu_cores()
 {
-    printf( "\rProgress: %3d%% [%" PRId64 " / %" PRId64 " bytes]", (int)( cur * 100 / max ), (int64_t)cur, (int64_t)max );
-    fflush( stdout );
+#ifdef _WIN32
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    return si.dwNumberOfProcessors;
+#else
+    return (int)(sysconf(_SC_NPROCESSORS_ONLN));
+#endif
+}
+
+static int _get_file_uid( const char *path, struct xnc_file_id *id )
+{
+#ifdef _WIN32
+    HANDLE h;
+    BY_HANDLE_FILE_INFORMATION fi;
+
+    h = CreateFileA( path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL );
+    if( h == INVALID_HANDLE_VALUE ) return 0;
+
+    GetFileInformationByHandle( h, &fi );
+    id->vid = (uint64_t)fi.dwVolumeSerialNumber;
+    id->fid = (uint64_t)(( (uint64_t)fi.nFileIndexHigh << 32 ) | fi.nFileIndexLow);
+    CloseHandle( h );
+
+    return 1;
+#else
+    struct stat st;
+    if( stat( path, &st ) != 0 ) return 0;
+
+    id->vid = (uint64_t)st.st_dev;
+    id->fid = (uint64_t)st.st_ino;
+
+    return 1;
+#endif
 }
 
 // パスをディレクトリとファイル名に分けて正規化
@@ -77,16 +124,34 @@ static int _get_dir_and_name_by_path( const char *src, char *dst_dir, char *dst_
     return 1;
 }
 
+static void _usage( char *path )
+{
+    char path_dir[PATH_MAX], path_file[PATH_MAX], *name;
+    if( _get_dir_and_name_by_path( path, path_dir, path_file, PATH_MAX ) ){
+        name = path_file;
+    } else{
+        name = XNC_NAME;
+    }
+    einfof( "Xor deNCrypter %s", XNC_VERSION );
+    einfof( "Usage: %s [-ednfv] [-a xor|seed-xor] [-p passwd] [-o dir] [-x ext] file [file ...]", name );
+}
+
+char *xnc_get_mode_name( enum XncMode mode )
+{
+    static char *mode_str[] = { "DECODE", "ENCODE" };
+    return mode_str[mode];
+}
+
 // 終端にNULLを書きこまない
 void xnc_salt_seed_gen( unsigned char *buf, size_t len )
 {
     while( len-- ) *buf++ = rand() & 0xFF;
 }
 
-void xnc_create_salt( struct XncContext *xnc, unsigned char *output, size_t len )
+void xnc_create_salt( struct XncHash *hs, unsigned char *output, size_t len )
 {
     xnc_salt_seed_gen( output, len );
-    hash_sha256( xnc, output, len, output );
+    hash_sha256( hs, output, len, output );
 }
 
 int xnc_read_salt( unsigned char *output, size_t len, FILE *fp )
@@ -108,55 +173,50 @@ int xnc_write_salt( const unsigned char *salt, size_t len, FILE *fp )
 }
 
 // success = return 0
-int xnc_xor_conv( struct XncContext *xnc, FILE *src, off_t fsize, FILE *dst, struct XncAlgoParams *p )
+int xnc_xor_conv( const struct Xnc *xnc, struct XncJob *job, struct XncAlgoParams *p )
 {
-    unsigned char *buf = st_xnc_buffer;
+    char *err;
     off_t progress = 0;
     size_t read_bytes;
-    clock_t clock_now, clock_last_notice = 0;
 
-    if( fseek( src, 0, SEEK_SET ) != 0 || fseek( dst, 0, SEEK_SET ) != 0 ) return 0x1;
+    if( fseek( job->file.src.fh, 0, SEEK_SET ) != 0 || fseek( job->file.dst.fh, 0, SEEK_SET ) != 0 ) return 0x1;
 
-    while( progress < fsize ){
-        // 進捗表示
-        if( xnc->flags & XNC_F_VERBOSE && ( clock_now = clock() ) - clock_last_notice >= CLOCKS_PER_SEC ){
-            _show_progress( progress, fsize );
-            clock_last_notice = clock_now;
-        }
+    while( progress < job->file.src.size ){
+        // 進捗更新
+        atomic_store( &( job->progress ), (int)( progress * 100 / job->file.src.size ) );
 
         // XNC_BUF_SIZE読み出す
         // 残りがXNC_BUF_SIZE以下なら残りのサイズに合わせる
         read_bytes = fread(
-            buf,
+            job->buf,
             1,
-            ( fsize - progress < XNC_BUF_SIZE ) ? ( fsize - progress ) : XNC_BUF_SIZE,
-            src
+            ( job->file.src.size - progress < XNC_BUF_SIZE ) ? ( job->file.src.size - progress ) : XNC_BUF_SIZE,
+            job->file.src.fh
         );
         if( ! read_bytes ){
-            einfo( "\nFailed to read source file while converting." );
+            err = "Failed to read source file while converting.";
+            queue_try_push( xnc->error, err, strlen( err ) + 1 );
             return 0x2;
         }
 
         // 必ず32バイト境界で読みだしたことにする
-        p->xor( xnc, buf, ( read_bytes + 31 ) / 32, p->ctx );
+        p->xor( job->hs, job->buf, ( read_bytes + 31 ) / 32, p->ctx );
 
         // 実際の読み出しサイズのみ書きこむ
-        if( fwrite( buf, 1, read_bytes, dst ) != read_bytes ){
-            einfo( "\nFailed to write output file while converting." );
+        if( fwrite( job->buf, 1, read_bytes, job->file.dst.fh ) != read_bytes ){
+            err = "Failed to write output file while converting.";
+            queue_try_push( xnc->error, err, strlen( err ) + 1 );
             return 0x4;
         }
         progress += read_bytes;
     }
 
-    if( xnc->flags & XNC_F_VERBOSE ){
-        _show_progress( fsize, fsize );
-        printf( "\n" );
-    }
+    atomic_store( &( job->progress ), (int)( progress * 100 / job->file.src.size ) );
 
     return 0;
 }
 
-static int parse_args( struct XncContext *xnc, int argc, char *argv[] )
+static int parse_args( struct Xnc *xnc, int argc, char *argv[] )
 {
     int mdchk = 0, opt;
     while( ( opt = getopt( argc, argv, "edfvo:x:a:p:n" ) ) != -1 ){
@@ -231,152 +291,373 @@ static int parse_args( struct XncContext *xnc, int argc, char *argv[] )
     return optind;
 }
 
+
+int thread_main( void *argp )
+{
+    const struct Xnc *xnc = argp;
+    struct XncHash *hash;
+    struct XncJob *job;
+    void *dst;
+
+    unsigned char *buf;
+    
+    buf = malloc( XNC_BUF_SIZE );
+    if( ! buf ) return 1;
+
+    hash = hash_init();
+
+    srand( (unsigned int)time( NULL ) ^ ( (unsigned int)clock() << 16 ) + (uintptr_t)buf );
+
+    while( ( dst = queue_pop( xnc->task ) ) ){
+        job = *(struct XncJob **)dst;
+
+        if( ! job ){
+            queue_giveback( dst );
+            break;
+        }
+        // jobは毎回違うポインタがくる可能性があるため自分が必要なデータは常に再セット
+        job->hs  = hash;
+        job->buf = buf;
+        job->status = xnc->algo.func( xnc, job );
+        queue_push( xnc->prog, dst, sizeof( void* ) );
+        queue_giveback( dst );
+    }
+
+    hash_destroy( hash );
+
+    free( buf );
+
+    return 0;
+}
+
+static int prepare_to_job( struct Xnc *xnc, struct XncJob *job, char *file )
+{
+    int store_len;
+    char src_path[PATH_MAX];
+    char *outdir, *dot, *err;
+    struct stat st;
+
+    char path_dir[PATH_MAX], path_file[PATH_MAX];
+
+    if( ! _get_dir_and_name_by_path( file, path_dir, path_file, PATH_MAX ) ){
+        err = "Failed to parse input file path: %s";
+        queue_try_push( xnc->error, err, strlen( err ) + 1 );
+        goto NEXT;
+    }
+
+    if( path_file[0] == '\0' ){
+        err = "Empty source file name specified.";
+        queue_try_push( xnc->error, err, strlen( err ) + 1 );
+        goto NEXT;
+    }
+
+    store_len = snprintf( src_path, PATH_MAX, "%s/%s", path_dir, path_file );
+    if( store_len >= PATH_MAX ){
+        err = "Source file path is too long.";
+        queue_try_push( xnc->error, err, strlen( err ) + 1 );
+        goto NEXT;
+    }
+
+    outdir = xnc->outdir ? xnc->outdir : path_dir;
+
+    // 末尾が ".xnc" (xnc.ext) だったら'.'の位置を保存
+    dot = strrchr( path_file, '.' );
+    if( dot && strcasecmp( dot + 1, xnc->ext ) != 0 ){
+        dot = NULL;
+    }
+
+    // 動作モードを確定
+    if( xnc->flags & XNC_F_AUTODETECT ){
+        job->mode = dot ? XNC_DECODE : XNC_ENCODE;
+    } else{
+        job->mode = xnc->mode;
+    }
+
+    if( stat( src_path, &st ) != 0 || ! S_ISREG( st.st_mode ) ){
+        goto SKIP;
+    }
+
+    job->file.src.fh = fopen( src_path, "rb" );
+    if( ! job->file.src.fh ){
+        err = "Failed to open source file: %s";
+        queue_try_push( xnc->error, err, strlen( err ) + 1 );
+        goto NEXT;
+    }
+
+    if( fseek( job->file.src.fh, 0, SEEK_END ) != 0 )             goto NEXT;
+    if( ( job->file.src.size = ftello( job->file.src.fh ) ) < 0 ) goto NEXT;
+
+    // 処理に必要な出力パスを取得
+    switch( job->mode ){
+        case XNC_ENCODE:
+            store_len = snprintf( job->file.dst.path, PATH_MAX, "%s/%s.%s", outdir, path_file, xnc->ext );
+            if( store_len >= PATH_MAX ){
+                err = "Filename too long.";
+                queue_try_push( xnc->error, err, strlen( err ) + 1 );
+                goto NEXT;
+            }
+            break;
+        case XNC_DECODE:
+            if( dot ) *dot = '\0';
+            // ハッシュサイズ+1バイトでもデータがない場合はxncファイルではない
+            if( job->file.src.size < XNC_HASH_SIZE + 1 ){
+                err = "File is too small. Skipped.";
+                queue_try_push( xnc->error, err, strlen( err ) + 1 );
+                goto NEXT;
+            }
+            store_len = snprintf( job->file.dst.path, PATH_MAX, "%s/%s", outdir, path_file );
+            if( store_len >= PATH_MAX ){
+                err = "Filename too long.";
+                queue_try_push( xnc->error, err, strlen( err ) + 1 );
+                goto NEXT;
+            }
+            break;
+    }
+
+    // エラーチェック
+    if( strcasecmp( src_path, job->file.dst.path ) == 0 ){
+        err = "Source and output paths are the same. Skipped.";
+        queue_try_push( xnc->error, err, strlen( err ) + 1 );
+        goto NEXT;
+    }
+
+    //infof( xnc, "Output file: %s", job->file.dst.path );
+    if( access( job->file.dst.path, F_OK ) == 0 ){
+        struct xnc_file_id fuid;
+        if( ! _get_file_uid( job->file.dst.path, &fuid ) ){
+            err = "Failed to get output file id.";
+            queue_try_push( xnc->error, err, strlen( err ) + 1 );
+            goto NEXT;
+        }
+        for( unsigned int i = 0; i < xnc->id_cnt; i++ ){
+            if( memcmp( &fuid, xnc->ids + i, sizeof( fuid ) ) == 0 ){
+                err = "Output file already exists as input file. Skipped.";
+                queue_try_push( xnc->error, err, strlen( err ) + 1 );
+                goto NEXT;
+            }
+        }
+        if( ! ( xnc->flags & XNC_F_OVERWRITE ) ){
+            err = "Output path already exists.";
+            queue_try_push( xnc->error, err, strlen( err ) + 1 );
+            goto NEXT;
+        }
+    }
+    
+    // 変換
+    if( job->file.src.size > 0 ){
+        job->file.dst.fh = fopen( job->file.dst.path, "wb" );
+        if( ! job->file.dst.fh ){
+            err = "Failed to open output file: %s";
+            queue_try_push( xnc->error, err, strlen( err ) + 1 );
+            goto NEXT;
+        }
+    } else{
+        goto NEXT;
+    }
+
+    job->status = 0;
+    atomic_store( &(job->progress), 0 );
+    
+    return 0;
+
+    NEXT:
+        if( job->file.src.fh ) fclose( job->file.src.fh );
+        return 1;
+    
+    SKIP:
+        return -1;
+}
+
+static void finish_job( struct XncJob *job )
+{
+    if( job->status == 0 ){
+        fclose( job->file.dst.fh );
+    } else{
+        fclose( job->file.dst.fh );
+        remove( job->file.dst.path );
+    }
+    fclose( job->file.src.fh );
+}
+
 int main( int argc, char *argv[] )
 {
-    int rv = 0, args_offset, store_len;
-    char src_path[PATH_MAX], dst_path[PATH_MAX];
-    char path_dir[PATH_MAX], path_file[PATH_MAX];
-    char *dot, *outdir;
-    FILE *src = NULL, *dst = NULL;
-    off_t src_size;
+    int rv = 0, args_offset, slot = 0, inprogress = 0, lnoff = 0;
+    char **file;
 
-    struct XncContext xnc = { 0 };
-    
+    struct {
+        ThrwCtx *list;
+        int max;
+    } thr;
+
+    struct {
+        struct XncJob *slots;
+        int max;
+    } jobs;
+
+    // 引数を処理
     args_offset = parse_args( &xnc, argc, argv );
     if( args_offset < 0 ){
-        char *name;
-        if( _get_dir_and_name_by_path( argv[0], path_dir, path_file, PATH_MAX ) ){
-            name = path_file;
-        } else{
-            name = XNC_NAME;
-        }
-        einfof( "Xor deNCrypter %s", XNC_VERSION );
-        einfof( "Usage: %s [-ednfv] [-a xor|seed-xor] [-p passwd] [-o dir] [-x ext] file [file ...]", name );
+        _usage( argv[0] );
         return 1;
     }
-    xnc.buf = st_xnc_buffer;
 
-    hash_init( &xnc );
-    srand( (unsigned int)time( NULL ) ^ ( (unsigned int)clock() << 16 ) );
-
-    for( int offset = args_offset; offset < argc ; offset++ ){
-        src = NULL;
-        dst = NULL;
-        if( ! _get_dir_and_name_by_path( argv[offset], path_dir, path_file, PATH_MAX ) ){
-            einfof( "Failed to parse source path strings: %s", argv[offset] );
-            goto NEXT;
+    // 衝突検知用のファイル識別子リストを作成
+    xnc.id_cnt = argc - args_offset;
+    xnc.ids = malloc( sizeof( struct xnc_file_id ) * xnc.id_cnt );
+    if( ! xnc.ids ){
+        einfo( "Failed to allocate file id table." );
+        return 1;
+    }
+    for( unsigned int i = 0; i < xnc.id_cnt; i++ ){
+        if( ! _get_file_uid( argv[args_offset + i], xnc.ids + i ) ){
+            einfo( "Failed to get file id." );
+            return 1;
         }
-
-        if( path_file[0] == '\0' ){
-            einfo( "Empty source file name specified." );
-            goto NEXT;
-        }
-
-        store_len = snprintf( src_path, PATH_MAX, "%s/%s", path_dir, path_file );
-        if( store_len >= PATH_MAX ){
-            einfo( "Source file path is too long." );
-            goto NEXT;
-        }
-
-        outdir = xnc.outdir ? xnc.outdir : path_dir;
-
-        info( &xnc, "-----------------------------------------------" );
-        infof( &xnc, "Source file: %s", src_path );
-
-        // 末尾が ".xnc" (xnc.ext) だったら'.'の位置を保存
-        dot = strrchr( path_file, '.' );
-        if( dot && strcasecmp( dot + 1, xnc.ext ) != 0 ){
-            dot = NULL;
-        }
-
-        // 動作モードを確定
-        if( xnc.flags & XNC_F_AUTODETECT ){
-            xnc.mode = dot ? XNC_DECODE : XNC_ENCODE;
-        }
-
-        src = fopen( src_path, "rb" );
-        if( ! src ){
-            einfof( "Failed to open source file: %s", src_path );
-            goto NEXT;
-        }
-
-        // ファイルサイズを取得
-        if( fseek( src, 0, SEEK_END ) < 0 )    goto NEXT;
-        if( ( src_size = ftello( src ) ) < 0 ) goto NEXT;
-
-        // 処理に必要な出力パスを取得
-        switch( xnc.mode ){
-            case XNC_ENCODE:
-                store_len = snprintf( dst_path, PATH_MAX, "%s/%s.%s", outdir, path_file, xnc.ext );
-                if( store_len >= PATH_MAX ){
-                    einfo( "Filename too long." );
-                    goto NEXT;
-                }
-                break;
-            case XNC_DECODE:
-                if( dot ) *dot = '\0';
-
-                // ハッシュサイズ+1バイトでもデータがない場合はxncファイルではない
-                if( src_size < XNC_HASH_SIZE + 1 ){
-                    einfo( "File is too small. Skipped.");
-                    goto NEXT;
-                }
-
-                store_len = snprintf( dst_path, PATH_MAX, "%s/%s", outdir, path_file );
-                if( store_len >= PATH_MAX ){
-                    einfo( "Filename too long." );
-                    goto NEXT;
-                }
-                break;
-        }
-
-        // エラーチェック
-        if( strcasecmp( src_path, dst_path ) == 0 ){
-            einfo( "Source and output paths are the same. Skipped." );
-            goto NEXT;
-        }
-
-        infof( &xnc, "Output file: %s", dst_path );
-        if( access( dst_path, F_OK ) == 0 && ! ( xnc.flags & XNC_F_OVERWRITE ) ){
-            einfof( "Output path already exists: %s", dst_path );
-            goto NEXT;
-        }
-
-        
-        // 変換
-        if( src_size > 0 ){
-            dst = fopen( dst_path, "wb" );
-            if( ! dst ){
-                einfof( "Failed to open output file: %s", dst_path );
-                goto NEXT;
-            }
-
-            infof( &xnc, "Processing %s ...", xnc.algo.name );
-            if(
-                xnc.algo.func( &xnc, src, src_size, dst ) != 0 ||
-                ferror( src ) ||
-                ferror( dst )
-            ){
-                fclose( dst );
-                remove( dst_path );
-                goto NEXT;
-            }
-            fclose( dst );
-        } else{
-            einfo( "Source file is empty. Skipped." );
-        }
-
-        fclose( src );
-
-        continue;
-
-        NEXT:
-            einfo( "Some error occurred. Skipped.");
-            rv |= 1;
-            if( src ) fclose( src );
     }
 
-    hash_destroy( &xnc );
+    // ファイルリストの先頭を取得
+    file = argv + args_offset;
+
+    // スレッドとジョブのテーブルを確保
+    thr.max    = _get_cpu_cores();
+    jobs.max   = (int)( thr.max * 1.3 );
+
+    jobs.slots = calloc( jobs.max, sizeof( struct XncJob ) );
+    if( ! jobs.slots ){
+        einfo( "Failed to allocate jobs table." );
+        return 1;
+    }
+
+    thr.list = malloc( sizeof( ThrwCtx ) * thr.max );
+    if( ! thr.list ){
+        einfo( "Failed to allocate threads context." );
+        return 1;
+    }
+
+    for( int i = 0; i < thr.max; i++ ){
+        if( ! thrw_new( thread_main, (void *)&xnc, thr.list + i ) ){
+            einfo( "Failed to initialize thread." );
+            return 1;
+        }
+    }
+    
+    // キュー
+    if(
+        ! ( xnc.task  = queue_new( jobs.max ) ) ||
+        ! ( xnc.prog  = queue_new( jobs.max ) ) ||
+        ! ( xnc.error = queue_new( jobs.max ) )
+    ){
+        einfo( "Failed to allocate queue." );
+        return 1;
+    }
+
+    // 進捗表示準備
+    if( xnc.flags & XNC_F_VERBOSE ) printf( "\n" );
+
+    // ジョブを使えるだけ使う
+    while( *file && slot < jobs.max ){
+        void *err;
+        struct XncJob *j = jobs.slots + slot;
+
+        if( prepare_to_job( &xnc, j, *file ) == 0 ){
+            if( queue_push( xnc.task, &j, sizeof( j ) ) == 0 ){
+                inprogress++;
+                slot++;
+            }
+        }
+        file++;
+
+        while( ( err = queue_try_pop( xnc.error ) ) ){
+            char *errmsg = (char *)err;
+            printf( "%s\n", errmsg );
+            queue_giveback( err );
+        }
+    }
+
+    // ジョブが終わったら新しいジョブを設定してキュー
+    lnoff = 0;
+    while( *file || inprogress ){
+        void *dst, *err;
+        if( ( dst = queue_timed_pop( xnc.prog, 1000 ) ) ){
+            struct XncJob *j = *(struct XncJob **)dst;
+            // ジョブ1つ完了
+            inprogress--;
+
+            finish_job( j );
+
+            if( *file ){
+                if( prepare_to_job( &xnc, j, *file ) == 0 ){
+                    if( queue_push( xnc.task, &j, sizeof( j ) ) == 0 ){
+                        inprogress++;
+                    }
+                }
+                file++;
+            }
+            queue_giveback( dst );
+        }
+
+        // 進捗表示
+        if( xnc.flags & XNC_F_VERBOSE ){
+            char str[128], *path;
+            size_t pos, filled, left;
+            int progress;
+
+            pos = snprintf( str, sizeof( str ), "\x1b[%dA", lnoff );
+            write( STDOUT_FILENO, str, pos );
+            
+            for( int i = 0; i < jobs.max; i++ ){
+                progress = atomic_load( &(jobs.slots[i].progress) );
+                filled = progress * XNC_PROGBAR_LEN / 100;
+                left  = progress == 100 ? 0 : XNC_PROGBAR_LEN - filled - 1;
+
+                pos = snprintf( str, sizeof( str ), "\x1b[2K%s %2d [\x1b[32m", xnc_get_mode_name( jobs.slots[i].mode ), i );
+                memset( str + pos, '=', filled );
+                pos += filled;
+
+                if( progress < 100 ) str[pos++] = '>';
+                
+                memset( str + pos, ' ', left );
+                pos += left;
+
+                if( strlen( jobs.slots[i].file.dst.path ) > 32 ){
+                    path = jobs.slots[i].file.dst.path + strlen( jobs.slots[i].file.dst.path ) - 32;
+                } else{
+                    path = jobs.slots[i].file.dst.path;
+                }
+                pos += snprintf( str + pos, sizeof( str ) - pos,"\x1b[0m] %3d%% %-32.32s\n", progress, path );
+                write( STDOUT_FILENO, str, pos );
+            }
+            lnoff = jobs.max;
+        }
+        
+        while( ( err = queue_try_pop( xnc.error ) ) ){
+            char *errmsg = (char *)err;
+            write( STDERR_FILENO, errmsg, strlen( errmsg ) );
+            write( STDERR_FILENO, "\n", 1 );
+            queue_giveback( err );
+            lnoff++;
+        }
+    }
+    
+    // 子スレッドはキューからNULLを受け取ると終了するので、スレッドの数だけNULLをキューに入れる
+    for( int i = 0; i < thr.max; i++ ){
+        struct XncJob *j = NULL;
+        queue_push( xnc.task, &j, sizeof( j ) );
+    }
+
+    // スレッドの終了を待ってから後片付け
+    for( int i = 0; i < thr.max; i++ ){
+        thrw_wait_for_exit( thr.list + i );
+        thrw_destroy( thr.list + i );
+    }
+
+    queue_destroy( xnc.task );
+    queue_destroy( xnc.prog );
+    queue_destroy( xnc.error );
+
+    free( thr.list );
+    free( jobs.slots );
+    free( xnc.ids );
 
     return rv;
 }

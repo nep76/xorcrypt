@@ -7,4 +7,4 @@ MAKETEST.*
 
 dist/
 .vscode/
-xorcrypt.code-workspace
+*.code-workspace*

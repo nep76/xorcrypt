@@ -3,16 +3,12 @@ name: Build and Release
 on:
   workflow_dispatch:
     inputs:
-      build_linux_glibc:
-        description: "Build for x86-64 Linux-glibc"
+      build_linux:
+        description: "Build for x86-64 Linux"
         type: boolean
         default: true
-      build_linux_musl:
-        description: "Build for x86-64 Linux-musl"
-        type: boolean
-        default: true
-      build_windows_ucrt:
-        description: "Build for x86-64 Windows-ucrt"
+      build_windows:
+        description: "Build for x86-64 Windows"
         type: boolean
         default: true
       target_branch:
@@ -31,11 +27,9 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            target: x86_64-linux-glibc
-          - os: ubuntu-latest
-            target: x86_64-linux-musl
+            target: x86_64-linux
           - os: windows-latest
-            target: x86_64-windows-ucrt
+            target: x86_64-windows
 
     steps:
       - name: Checkout
@@ -50,30 +44,15 @@ jobs:
           VERSION=$(grep "VERSION" ./xorcrypt.h | cut -d ' ' -f 3 | tr -d ' "' || echo V)
           echo "ver_str=$VERSION" >> $GITHUB_OUTPUT
       
-      - name: Build on Linux with glibc
-        if: |
-          github.event.inputs.build_linux_glibc == 'true' &&
-          matrix.target == 'x86_64-linux-glibc'
-        run: |
-          sudo apt update
-          sudo apt install -y build-essential libssl-dev
-          make distclean dist disttest
-          chmod +x ./xorcrypt ./xorcrypt-avx2
-          tar -cvzf xorcrypt-${{ steps.vars.outputs.ver_str }}-${{ matrix.target }}.tar.gz \
-          xorcrypt \
-          xorcrypt-avx2 \
-          README.md \
-          LICENSE
-
       - name: Build on Linux with musl inside Alpine
         if: |
-          github.event.inputs.build_linux_musl == 'true' &&
-          matrix.target == 'x86_64-linux-musl'
+          github.event.inputs.build_linux == 'true' &&
+          matrix.target == 'x86_64-linux'
         run: |
           docker run --rm -v ${{ github.workspace }}:/src -w /src alpine \
             sh -c "
-              apk add --no-cache build-base openssl-dev &&
-              make distclean dist disttest &&
+              apk add --no-cache build-base openssl-dev openssl-libs-static &&
+              make WITH_STATIC=yes distclean dist disttest &&
               chmod +x ./xorcrypt ./xorcrypt-avx2 &&
               tar -cvzf xorcrypt-${{ steps.vars.outputs.ver_str }}-${{ matrix.target }}.tar.gz \
               xorcrypt \
@@ -84,27 +63,15 @@ jobs:
             
       - name: Build on Windows
         if: |
-          github.event.inputs.build_windows_ucrt == 'true' &&
-          matrix.target == 'x86_64-windows-ucrt'
+          github.event.inputs.build_windows == 'true' &&
+          matrix.target == 'x86_64-windows'
         shell: bash
         run: make distclean dist disttest
 
-      #- name: Build on Windows with w64devkit
-      #  if: |
-      #    github.event.inputs.build_windows == 'true' &&
-      #    matrix.target == 'win64'
-      #  shell: bash
-      #  run: |
-      #    mkdir _tmp
-      #    curl -L https://github.com/skeeto/w64devkit/releases/download/v2.7.0/w64devkit-x64-2.7.0.7z.exe -o _tmp/w64d_setup.exe
-      #    ./_tmp/w64d_setup.exe -y -o_tmp
-      #    export PATH="${GITHUB_WORKSPACE}/_tmp/w64devkit/bin:${PATH}"
-      #    make distclean dist disttest
-
       - name: Archive for Windows
         if: |
-          github.event.inputs.build_windows_ucrt == 'true' &&
-          matrix.target == 'x86_64-windows-ucrt'
+          github.event.inputs.build_windows == 'true' &&
+          matrix.target == 'x86_64-windows'
         shell: pwsh
         run: |
           Compress-Archive -DestinationPath xorcrypt-${{ steps.vars.outputs.ver_str }}-${{ matrix.target }}.zip -Path `

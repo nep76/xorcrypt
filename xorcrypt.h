@@ -4,11 +4,10 @@
 #define UNUSED( v ) ((void)v)
 
 #define XNC_NAME    "xorcrypt"
-#define XNC_VERSION "260509-04"
+#define XNC_VERSION "260526-00"
 
-#define XNC_HASH_PERMIT_INLINE
-
-struct XncContext;
+struct Xnc;
+struct XncJob;
 
 #include "main.h"
 #include "hash.h"

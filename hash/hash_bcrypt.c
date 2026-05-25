@@ -15,8 +15,6 @@ struct XncHash {
     struct XncBCryptPvd hmac_sha256;
 };
 
-static struct XncHash st_hash;
-
 static void _sha256( const unsigned char *msg,
                      size_t msg_len,
                      unsigned char *key,
@@ -27,7 +25,8 @@ static void _sha256( const unsigned char *msg,
     BCRYPT_HASH_HANDLE h_hash;
     NTSTATUS rv = 0;
 
-    PUCHAR hashobj = alloca( pvd->hashobj_size );
+    //PUCHAR hashobj = alloca( pvd->hashobj_size );
+    UCHAR hashobj[512];
 
     rv = BCryptCreateHash( pvd->h_alg, &(h_hash), hashobj, pvd->hashobj_size, key, key_len, 0 );
     if( rv == 0 ){
@@ -42,47 +41,48 @@ static void _sha256( const unsigned char *msg,
     }
 }
 
-void hash_init( struct XncContext *xnc )
+struct XncHash *hash_init()
 {
     DWORD result = 0;
     NTSTATUS rv = 0;
 
-    rv |= BCryptOpenAlgorithmProvider( &(st_hash.sha256.h_alg), BCRYPT_SHA256_ALGORITHM, NULL, 0 );
-    rv |= BCryptGetProperty( st_hash.sha256.h_alg, BCRYPT_OBJECT_LENGTH, (PUCHAR)&(st_hash.sha256.hashobj_size), sizeof( DWORD ), &result, 0 );
+    struct XncHash *h = malloc( sizeof( *h ) );
+    if( ! h ) return NULL;
 
-    rv |= BCryptOpenAlgorithmProvider( &(st_hash.hmac_sha256.h_alg), BCRYPT_SHA256_ALGORITHM, NULL, BCRYPT_ALG_HANDLE_HMAC_FLAG );
-    rv |= BCryptGetProperty( st_hash.hmac_sha256.h_alg, BCRYPT_OBJECT_LENGTH, (PUCHAR)&(st_hash.hmac_sha256.hashobj_size), sizeof( DWORD ), &result, 0 );
+    rv |= BCryptOpenAlgorithmProvider( &(h->sha256.h_alg), BCRYPT_SHA256_ALGORITHM, NULL, 0 );
+    rv |= BCryptGetProperty( h->sha256.h_alg, BCRYPT_OBJECT_LENGTH, (PUCHAR)&(h->sha256.hashobj_size), sizeof( DWORD ), &result, 0 );
 
-    xnc->hash = &st_hash;
+    rv |= BCryptOpenAlgorithmProvider( &(h->hmac_sha256.h_alg), BCRYPT_SHA256_ALGORITHM, NULL, BCRYPT_ALG_HANDLE_HMAC_FLAG );
+    rv |= BCryptGetProperty( h->hmac_sha256.h_alg, BCRYPT_OBJECT_LENGTH, (PUCHAR)&(h->hmac_sha256.hashobj_size), sizeof( DWORD ), &result, 0 );
 
     if( rv != 0 ){
         einfo( "Failed to initialize SHA256 provider. Aborting." );
         exit( 1 );
     }
+
+    return h;
 }
 
-void hash_destroy( struct XncContext *xnc )
+void hash_destroy( struct XncHash *hash )
 {
     // initは失敗するとexit()するのでここにくるなら初期化できているはず
-    BCryptCloseAlgorithmProvider( xnc->hash->sha256.h_alg, 0 );
-    BCryptCloseAlgorithmProvider( xnc->hash->hmac_sha256.h_alg, 0 );
+    BCryptCloseAlgorithmProvider( hash->sha256.h_alg, 0 );
+    BCryptCloseAlgorithmProvider( hash->hmac_sha256.h_alg, 0 );
 
-    memset( xnc->hash, 0, sizeof( struct XncHash ) );
-
-    xnc->hash = NULL;
+    free( hash );
 }
 
-void hash_sha256( struct XncContext *xnc, const unsigned char *msg, size_t len, unsigned char *output )
+void hash_sha256( struct XncHash *hash, const unsigned char *msg, size_t len, unsigned char *output )
 {
-    _sha256( msg, len, NULL, 0, output, &(xnc->hash->sha256) );
+    _sha256( msg, len, NULL, 0, output, &(hash->sha256) );
 }
 
-void hash_sha256hmac( struct XncContext *xnc,
+void hash_sha256hmac( struct XncHash *hash,
                       const unsigned char *msg,
                       size_t msg_len,
                       unsigned char *key,
                       size_t key_len,
                       unsigned char *output )
 {
-    _sha256( msg, msg_len, key, key_len, output, &(xnc->hash->hmac_sha256) );
+    _sha256( msg, msg_len, key, key_len, output, &(hash->hmac_sha256) );
 }
