@@ -306,7 +306,7 @@ int thread_main( void *argp )
 
     hash = hash_init();
 
-    srand( (unsigned int)time( NULL ) ^ ( (unsigned int)clock() << 16 ) + (uintptr_t)buf );
+    srand( (unsigned int)time( NULL ) ^ ( ( (unsigned int)clock() << 16 ) + (uintptr_t)buf ) );
 
     while( ( dst = queue_pop( xnc->task ) ) ){
         job = *(struct XncJob **)dst;
