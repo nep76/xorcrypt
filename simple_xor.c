@@ -7,7 +7,7 @@ struct XncSimpleXor {
     unsigned char hash[XNC_HASH_SIZE];
 };
 
-static int algo_simple_xor( struct XncHash *hs, unsigned char *restrict buf, size_t blocks, void *ctx )
+int simple_xor_work( struct XncHash *hs, unsigned char *restrict buf, size_t blocks, XncAlgoCtx ctx )
 {
     struct XncSimpleXor *c = (struct XncSimpleXor *)ctx;
 
@@ -23,22 +23,19 @@ static int algo_simple_xor( struct XncHash *hs, unsigned char *restrict buf, siz
     return 1;
 }
 
-int simple_xor( const struct Xnc *xnc, struct XncJob *job )
+int simple_xor_init( const struct Xnc *xnc, struct XncJob *job )
 {
-    struct XncAlgoParams p;
-    struct XncSimpleXor  c;
-    unsigned char salt[XNC_SALT_SIZE];
-    int rv;
-    
-    p.xor = algo_simple_xor;
-    p.ctx = &c;
+    struct XncSimpleXor *c;
+
+    c = malloc( sizeof( *c ) );
+    if( ! c ) return -1;
 
     switch( job->mode ){
-        case XNC_ENCODE:
-            xnc_create_salt( job->hs, salt, sizeof( salt ) );
-            break;
         case XNC_DECODE:
-            job->file.src.size -= xnc_read_salt( salt, sizeof( salt ), job->file.src.fh ) * sizeof( salt );
+            job->fsrc.size -= xnc_read_salt( c->salt, sizeof( salt ), job->fsrc.fh ) * sizeof( c->salt );
+            break;
+        case XNC_ENCODE:
+            xnc_create_salt( job->hs, c->salt, sizeof( c->salt ) );
             break;
     }
 
@@ -50,23 +47,30 @@ int simple_xor( const struct Xnc *xnc, struct XncJob *job )
             char passwd[XNC_MAX_PASSWD];
         } __attribute__((packed)) seed;
 
-        memcpy( (void *)seed.salt, salt, sizeof( salt ) );
+        memcpy( (void *)seed.salt, c->salt, sizeof( c->salt ) );
         memcpy( (void *)seed.passwd, xnc->passwd.string, xnc->passwd.length );
-        hash_sha256( job->hs, (unsigned char *)&seed, sizeof( seed.salt ) + xnc->passwd.length, c.hash );
+        hash_sha256( job->hs, (unsigned char *)&seed, sizeof( seed.salt ) + xnc->passwd.length, c->hash );
     } else{
-        memcpy( c.hash, salt, sizeof( salt ) );
+        memcpy( c->hash, c->salt, sizeof( c->salt ) );
     }
 
-    //info_dumphex( xnc, "Salt", (unsigned char *)c.hash, sizeof( c.hash ) );
-    
-    // 変換
-    rv = xnc_xor_conv( xnc, job, &p );
+    // jobにコンテキストを紐づけ
+    job->algo_ctx = c;
 
-    if( rv == 0 && job->mode == XNC_ENCODE ){
-        if( ! xnc_write_salt( salt, sizeof( salt ), job->file.dst.fh ) ){
-            rv |= 0x1000;
+    return 0;
+}
+
+int simple_xor_finish( const struct Xnc *xnc, struct XncJob *job )
+{
+    struct XncSimpleXor *c = job->algo_ctx;
+
+    if( job->mode == XNC_ENCODE ){
+        if( ! xnc_write_salt( c->salt, sizeof( c->salt ), job->fdst.fh ) ){
+            free( c );
+            return -1;
         }
     }
 
-    return rv;
+    free( c );
+    return 0;
 }

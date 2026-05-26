@@ -51,7 +51,7 @@
 #define XNC_F_OVERWRITE   0x00000004
 #define XNC_F_NO_STRETCH  0x00000008
 
-typedef int (*XncFuncXor)( struct XncHash*, unsigned char * restrict, size_t, void* );
+typedef int (*XncFuncXor)( struct XncHash*, unsigned char * restrict, size_t, XncAlgoCtx );
 typedef int (*XncFuncAlgo)( const struct Xnc*, struct XncJob* );
 
 enum XncMode {
@@ -59,18 +59,16 @@ enum XncMode {
     XNC_ENCODE,
 };
 
-struct XncAlgoParams {
-    XncFuncXor xor;
-    void *ctx;
-};
-
 struct XncAlgo {
     char        *name;
-    XncFuncAlgo func;
+    XncFuncAlgo fn_init, fn_destroy;
+    XncFuncXor  fn_xor;
 };
 
+typedef void *XncAlgoCtx;
+
 struct Xnc {
-    QueueCtx *task, *prog, *error;
+    QueueCtx *read, *work, *write, *idle, *error;
 
     struct xnc_file_id *ids;
     unsigned int       id_cnt;
@@ -89,19 +87,21 @@ struct Xnc {
 struct XncJob {
     enum   XncMode mode;
     struct XncHash *hs;
+    XncAlgoCtx algo_ctx;
     struct {
-        struct {
-            FILE* fh;
-            char path[PATH_MAX];
-        } dst;
-        struct {
-            FILE* fh;
-            off_t size;
-        } src;
-    } file;
-    unsigned char *buf;
-    int status;
+        char path[PATH_MAX];
+        FILE *fh;
+        off_t size;
+        off_t cur_offset;
+        off_t read_bytes;
+   } fsrc;
+    struct {
+        char path[PATH_MAX];
+        FILE *fh;
+    } fdst;
+    unsigned char buf[XNC_BUF_SIZE];
     atomic_int progress;
+    int rv;
 };
 
 char *xnc_get_mode_name( enum XncMode mode );
@@ -109,6 +109,5 @@ void xnc_salt_seed_gen( unsigned char *buf, size_t len );
 void xnc_create_salt( struct XncHash *hs, unsigned char *output, size_t len );
 int  xnc_read_salt( unsigned char *output, size_t len, FILE *fp );
 int  xnc_write_salt( const unsigned char *salt, size_t len, FILE *fp );
-int  xnc_xor_conv( const struct Xnc *xnc, struct XncJob *job, struct XncAlgoParams *p );
 
 #endif
