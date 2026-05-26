@@ -1,11 +1,19 @@
 CC      ?= gcc
-CFLAGS  ?= -O3 -flto=auto -D_FILE_OFFSET_BITS=64 -ffunction-sections -fdata-sections -Wall -Wextra -Werror
-LDFLAGS ?= -O3 -flto=auto -s -Wl,--gc-sections
+CFLAGS  ?= -D_FILE_OFFSET_BITS=64 -ffunction-sections -fdata-sections -Wall -Wextra -Werror
+LDFLAGS ?= -Wl,--gc-sections
 LIBS    =
 
 SUFFIX =
 
 SRCS = $(wildcard *.c)
+
+ifdef WITH_DEBUG
+	CFLAGS  += -g -DDEBUG -O0
+	LDFLAGS += -g
+else
+	CFLAGS  += -O3 -flto=auto
+	LDFLAGS += -O3 -flto=auto -s
+endif
 
 ifdef WITH_OPTINFO
 	CFLAGS += -fopt-info
