@@ -521,7 +521,7 @@ int main( int argc, char *argv[] )
 
     // ファイルリストの先頭を取得
     file = argv + args_offset;
-
+    
     // スレッドとジョブのテーブルを確保
     jobs.max   = _get_cpu_cores();
     thr.max    = jobs.max + 2;
@@ -561,6 +561,18 @@ int main( int argc, char *argv[] )
         if( jobs.slots[i].xorshift32 == 0 ) jobs.slots[i].xorshift32 = i + 1;
     }
 
+    // キューを作成
+    if(
+        ! ( xnc.read  = rqueue_new( sizeof( void* ), jobs.max ) ) ||
+        ! ( xnc.work  = rqueue_new( sizeof( void* ), jobs.max ) ) ||
+        ! ( xnc.write = rqueue_new( sizeof( void* ), jobs.max ) ) ||
+        ! ( xnc.idle  = rqueue_new( sizeof( void* ), jobs.max ) ) ||
+        ! ( xnc.error = queue_new( 10 ) )
+    ){
+        einfo( "Failed to allocate queue." );
+        return 1;
+    }
+
     // I/Oスレッドとワーカースレッドを生成
     if(
         ! thrw_new( thread_read,  (void *)&xnc, thr.list ) ||
@@ -576,18 +588,6 @@ int main( int argc, char *argv[] )
         }
     }
     
-    // キュー
-    if(
-        ! ( xnc.read  = rqueue_new( sizeof( void* ), jobs.max ) ) ||
-        ! ( xnc.work  = rqueue_new( sizeof( void* ), jobs.max ) ) ||
-        ! ( xnc.write = rqueue_new( sizeof( void* ), jobs.max ) ) ||
-        ! ( xnc.idle  = rqueue_new( sizeof( void* ), jobs.max ) ) ||
-        ! ( xnc.error = queue_new( 10 ) )
-    ){
-        einfo( "Failed to allocate queue." );
-        return 1;
-    }
-
     // 進捗表示準備
    // if( xnc.flags & XNC_F_VERBOSE ) printf( "\n" );
 
