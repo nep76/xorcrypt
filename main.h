@@ -10,6 +10,7 @@
 #include "xorcrypt.h"
 #include "thread/thrw.h"
 #include "thread/queue.h"
+#include "thread/rqueue.h"
 
 #define XNC_DEFAULT_EXT "xnc"
 
@@ -19,6 +20,7 @@
 #define XNC_SALT_SIZE   32 // bytes
 #define XNC_MAX_PASSWD  64 // char
 #define XNC_BUF_SIZE    4096000 //4MB
+#define XNC_BUF_ALIGN   32 // AVX2
 
 #define XNC_STRETCH_TIMES 100000
 #define XNC_SEED_STATE    0xC0DECAFE // ストリームに混ぜる定数 state用
@@ -40,8 +42,8 @@
 #define xnc_be32( x ) htobe32( x )
 #endif
 
-#if ( XNC_BUF_SIZE % 32 ) != 0
-#error "XNC_BUF_SIZE must be a multiple of 32"
+#if ( XNC_BUF_SIZE % XNC_BUF_ALIGN ) != 0
+#error "XNC_BUF_SIZE must be a multiple of XNC_BUF_ALIGN"
 #endif
 
 #include "hash.h"
@@ -50,6 +52,8 @@
 #define XNC_F_VERBOSE     0x00000002
 #define XNC_F_OVERWRITE   0x00000004
 #define XNC_F_NO_STRETCH  0x00000008
+
+typedef void *XncAlgoCtx;
 
 typedef int (*XncFuncXor)( struct XncHash*, unsigned char * restrict, size_t, XncAlgoCtx );
 typedef int (*XncFuncAlgo)( const struct Xnc*, struct XncJob* );
@@ -65,13 +69,14 @@ struct XncAlgo {
     XncFuncXor  fn_xor;
 };
 
-typedef void *XncAlgoCtx;
-
 struct Xnc {
-    QueueCtx *read, *work, *write, *idle, *error;
+    RqueueCtx *read, *work, *write, *idle;
+    QueueCtx  *error;
 
     struct xnc_file_id *ids;
     unsigned int       id_cnt;
+
+    unsigned char *buf_addr;
 
     struct XncAlgo algo;
     enum XncMode   mode;
@@ -93,20 +98,22 @@ struct XncJob {
         FILE *fh;
         off_t size;
         off_t cur_offset;
-        off_t read_bytes;
+        size_t read_bytes;
    } fsrc;
     struct {
         char path[PATH_MAX];
         FILE *fh;
     } fdst;
-    unsigned char buf[XNC_BUF_SIZE];
+    unsigned char *buf;
     atomic_int progress;
     int rv;
+
+    uint32_t   xorshift32;
 };
 
 char *xnc_get_mode_name( enum XncMode mode );
-void xnc_salt_seed_gen( unsigned char *buf, size_t len );
-void xnc_create_salt( struct XncHash *hs, unsigned char *output, size_t len );
+void xnc_salt_seed_gen( uint32_t *xorshift32_seed, unsigned char *buf, size_t len );
+void xnc_create_salt( struct XncHash *hs, uint32_t *xorshift32, unsigned char *output, size_t len );
 int  xnc_read_salt( unsigned char *output, size_t len, FILE *fp );
 int  xnc_write_salt( const unsigned char *salt, size_t len, FILE *fp );
 

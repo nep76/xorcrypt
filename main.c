@@ -16,6 +16,8 @@
 #include "simple_xor.h"
 #include "seed_xor.h"
 
+#define MEMORY_ALIGN_ADDR( align, addr ) ( ( (uintptr_t)( addr ) + ( align ) - 1 ) & ( ~( (uintptr_t)( align ) - 1 ) ) )
+
 struct xnc_file_id {
     uint64_t vid;
     uint64_t fid;
@@ -69,6 +71,16 @@ static int _get_file_uid( const char *path, struct xnc_file_id *id )
 
     return 1;
 #endif
+}
+
+/* George Marsaglia の Xorshift RNG */
+static uint32_t xorshift32( uint32_t *state )
+{
+	uint32_t x = *state;
+	x ^= x << 13;
+	x ^= x >> 17;
+	x ^= x << 5;
+	return ( *state = x );
 }
 
 // パスをディレクトリとファイル名に分けて正規化
@@ -143,14 +155,14 @@ char *xnc_get_mode_name( enum XncMode mode )
 }
 
 // 終端にNULLを書きこまない
-void xnc_salt_seed_gen( unsigned char *buf, size_t len )
+void xnc_salt_seed_gen( uint32_t *xorshift32_seed, unsigned char *buf, size_t len )
 {
-    while( len-- ) *buf++ = rand() & 0xFF;
+    while( len-- ) *buf++ = xorshift32( xorshift32_seed ) & 0xFF;
 }
 
-void xnc_create_salt( struct XncHash *hs, unsigned char *output, size_t len )
+void xnc_create_salt( struct XncHash *hs, uint32_t *xorshift32_seed, unsigned char *output, size_t len )
 {
-    xnc_salt_seed_gen( output, len );
+    xnc_salt_seed_gen( xorshift32_seed, output, len );
     hash_sha256( hs, output, len, output );
 }
 
@@ -238,7 +250,7 @@ static int parse_args( struct Xnc *xnc, int argc, char *argv[] )
     } else if( strcmp( xnc->algo.name, "seed-xor" ) == 0 ){
         xnc->algo.name       = "seed-xor";
         xnc->algo.fn_init    = seed_xor_init;
-        xnc->algo.fn_destroy = seed_xor_destroy;
+        xnc->algo.fn_destroy = seed_xor_finish;
         xnc->algo.fn_xor     = seed_xor_work;
     } else{
         einfo( "Unknown algorithm specified.\n" );
@@ -255,28 +267,24 @@ int thread_read( void *argp )
 {
     const struct Xnc *xnc = argp;
     struct XncJob *job;
-    void *dst;
+    off_t read;
 
-    while( ( dst = queue_pop( xnc->read ) ) ){
-        job = *(struct XncJob **)dst;
+    while( rqueue_pop( xnc->read, &job, sizeof( job ) ) == 0 ){
+        if( ! job ) break;
 
-        if( ! job ){
-            queue_giveback( dst );
-            break;
-        }
+        read = ( job->fsrc.size - job->fsrc.cur_offset < XNC_BUF_SIZE ) ?
+            job->fsrc.size - job->fsrc.cur_offset : XNC_BUF_SIZE;
 
-        job->fsrc.read_bytes = fread( job->buf, 1, sizeof( job->buf ), job->fsrc.fh );
+        job->fsrc.read_bytes = fread( job->buf, 1, read, job->fsrc.fh );
         job->fsrc.cur_offset += job->fsrc.read_bytes;
-        if( job->fsrc.read_bytes < sizeof( job->buf ) && ferror( job->fsrc.fh ) ){
+        if( job->fsrc.read_bytes < XNC_BUF_SIZE && ferror( job->fsrc.fh ) ){
             char *err = "Failed to read source file.";
             queue_try_push( xnc->error, err, strlen( err ) + 1 );
             job->rv = 0x80001001;
-            queue_push( xnc->idle, dst, sizeof( dst ) );
-            queue_giveback( dst );
+            rqueue_push( xnc->idle, &job, sizeof( job ) );
         }
 
-        queue_push( xnc->work, dst, sizeof( dst ) );
-        queue_giveback( dst );
+        rqueue_push( xnc->work, &job, sizeof( job ) );
     }
 
     return 0;
@@ -286,32 +294,24 @@ int thread_write( void *argp )
 {
     const struct Xnc *xnc = argp;
     struct XncJob *job;
-    void *dst;
 
-    while( ( dst = queue_pop( xnc->write ) ) ){
-        job = *(struct XncJob **)dst;
-
-        if( ! job ){
-            queue_giveback( dst );
-            break;
-        }
+    while( rqueue_pop( xnc->write, &job, sizeof( job ) ) == 0 ){
+        if( ! job ) break;
 
         if( fwrite( job->buf, 1, job->fsrc.read_bytes, job->fdst.fh ) != job->fsrc.read_bytes ){
             char *err = "Failed to write output file.";
             queue_try_push( xnc->error, err, strlen( err ) + 1 );
             job->rv = 0x80001002;
-            queue_push( xnc->idle, dst, sizeof( dst ) );
-            queue_giveback( dst );
+            rqueue_push( xnc->idle, &job, sizeof( job ) );
         }
 
-        atomic_store( &(job->progress), (int)( job->fsrc.cur_offset * 100 / job->fsrc.size ) );
+        atomic_store( &(job->progress), (int)( job->fsrc.cur_offset * 100ULL / job->fsrc.size ) );
         
         if( job->fsrc.cur_offset < job->fsrc.size ){
-            queue_push( xnc->read, dst, sizeof( dst ) );
+            rqueue_push( xnc->read, &job, sizeof( job ) );
         } else{
-            queue_push( xnc->idle, dst, sizeof( dst ) );
+            rqueue_push( xnc->idle, &job, sizeof( job ) );
         }
-        queue_giveback( dst );
     }
 
     return 0;
@@ -321,30 +321,14 @@ int thread_write( void *argp )
 int thread_worker( void *argp )
 {
     const struct Xnc *xnc = argp;
-    struct XncHash *hash;
     struct XncJob *job;
-    void *dst;
 
-    hash = hash_init();
+    while( rqueue_pop( xnc->work, &job, sizeof( job ) ) == 0 ){
+        if( ! job ) break;
 
-    srand( (unsigned int)time( NULL ) ^ ( ( (unsigned int)clock() << 16 ) + (uintptr_t)hash ) );
-
-    while( ( dst = queue_pop( xnc->work ) ) ){
-        job = *(struct XncJob **)dst;
-
-        if( ! job ){
-            queue_giveback( dst );
-            break;
-        }
-
-        // jobは毎回違うポインタがくる可能性があるため自分が必要なデータは常に再セット
-        job->hs = hash;
         job->rv = xnc->algo.fn_xor( job->hs, job->buf, ( job->fsrc.read_bytes + 31 ) / 32, job->algo_ctx );
-        queue_push( xnc->write, dst, sizeof( void* ) );
-        queue_giveback( dst );
+        rqueue_push( xnc->write, &job, sizeof( job ) );
     }
-
-    hash_destroy( hash );
 
     return 0;
 }
@@ -395,6 +379,7 @@ static int prepare_to_job( struct Xnc *xnc, struct XncJob *job, char *file )
     if( stat( src_path, &st ) != 0 || ! S_ISREG( st.st_mode ) ){
         goto SKIP;
     }
+    job->fsrc.size = st.st_size;
 
     job->fsrc.fh = fopen( src_path, "rb" );
     if( ! job->fsrc.fh ){
@@ -402,9 +387,6 @@ static int prepare_to_job( struct Xnc *xnc, struct XncJob *job, char *file )
         queue_try_push( xnc->error, err, strlen( err ) + 1 );
         goto NEXT;
     }
-
-    if( fseek( job->fsrc.fh, 0, SEEK_END ) != 0 )             goto NEXT;
-    if( ( job->fsrc.size = ftello( job->fsrc.fh ) ) < 0 ) goto NEXT;
 
     // 処理に必要な出力パスを取得
     switch( job->mode ){
@@ -473,6 +455,9 @@ static int prepare_to_job( struct Xnc *xnc, struct XncJob *job, char *file )
         goto NEXT;
     }
 
+    // jobを初期化
+    job->fsrc.cur_offset = 0;
+    job->fsrc.read_bytes = 0;
     job->rv = 0;
     atomic_store( &(job->progress), 0 );
     
@@ -541,16 +526,39 @@ int main( int argc, char *argv[] )
     jobs.max   = _get_cpu_cores();
     thr.max    = jobs.max + 2;
 
+    // ジョブコンテキストテーブルを確保
     jobs.slots = calloc( jobs.max, sizeof( struct XncJob ) );
     if( ! jobs.slots ){
         einfo( "Failed to allocate jobs table." );
         return 1;
     }
 
+    // スレッドコンテキストを確保
     thr.list = malloc( sizeof( ThrwCtx ) * thr.max );
     if( ! thr.list ){
         einfo( "Failed to allocate threads context." );
         return 1;
+    }
+
+    // ジョブ用の作業バッファを確保
+    xnc.buf_addr = malloc( XNC_BUF_SIZE * jobs.max + XNC_BUF_ALIGN );
+    if( ! xnc.buf_addr ){
+        einfo( "Failed to allocate working buffer." );
+        return 1;
+    }
+
+    // ジョブ用作業領域をアラインを揃えて設定
+    // ジョブ用ハッシュコンテキストを初期化
+    // ジョブ用簡易乱数シード初期化
+    jobs.slots[0].buf        = (unsigned char *)MEMORY_ALIGN_ADDR( XNC_BUF_ALIGN, xnc.buf_addr );
+    jobs.slots[0].hs         = hash_init();
+    jobs.slots[0].xorshift32 = (uint32_t)time(NULL); 
+    if( jobs.slots[0].xorshift32 == 0 ) jobs.slots[0].xorshift32 = 1;
+    for( int i = 1; i < jobs.max; i++ ){
+        jobs.slots[i].buf        = jobs.slots[i - 1].buf + XNC_BUF_SIZE;
+        jobs.slots[i].hs         = hash_init();
+        jobs.slots[i].xorshift32 = ( ( jobs.slots[0].xorshift32 << 16 ) | ( jobs.slots[0].xorshift32 >>16 ) ) ^ (uint32_t)i;
+        if( jobs.slots[i].xorshift32 == 0 ) jobs.slots[i].xorshift32 = i + 1;
     }
 
     // I/Oスレッドとワーカースレッドを生成
@@ -570,9 +578,10 @@ int main( int argc, char *argv[] )
     
     // キュー
     if(
-        ! ( xnc.read  = queue_new( jobs.max ) ) ||
-        ! ( xnc.work  = queue_new( jobs.max ) ) ||
-        ! ( xnc.write = queue_new( jobs.max ) ) ||
+        ! ( xnc.read  = rqueue_new( sizeof( void* ), jobs.max ) ) ||
+        ! ( xnc.work  = rqueue_new( sizeof( void* ), jobs.max ) ) ||
+        ! ( xnc.write = rqueue_new( sizeof( void* ), jobs.max ) ) ||
+        ! ( xnc.idle  = rqueue_new( sizeof( void* ), jobs.max ) ) ||
         ! ( xnc.error = queue_new( 10 ) )
     ){
         einfo( "Failed to allocate queue." );
@@ -580,7 +589,7 @@ int main( int argc, char *argv[] )
     }
 
     // 進捗表示準備
-    if( xnc.flags & XNC_F_VERBOSE ) printf( "\n" );
+   // if( xnc.flags & XNC_F_VERBOSE ) printf( "\n" );
 
     // ジョブを使えるだけ使う
     while( *file && slot < jobs.max ){
@@ -589,7 +598,8 @@ int main( int argc, char *argv[] )
 
         if( prepare_to_job( &xnc, j, *file ) == 0 ){
             xnc.algo.fn_init( &xnc, j );
-            if( queue_push( xnc.read, &j, sizeof( j ) ) == 0 ){
+            fseek( j->fsrc.fh, 0, SEEK_SET );
+            if( rqueue_push( xnc.read, &j, sizeof( j ) ) == 0 ){
                 inprogress++;
                 slot++;
             }
@@ -607,10 +617,10 @@ int main( int argc, char *argv[] )
     // ジョブが終わったら新しいジョブを設定してキュー
     lnoff = 0;
     while( *file || inprogress ){
-        void *dst, *err;
+        struct XncJob *j;
+        void *err;
         //スレッドからの終了通知を待つ
-        if( ( dst = queue_timed_pop( xnc.idle, 1000 ) ) ){
-            struct XncJob *j = *(struct XncJob **)dst;
+        if( rqueue_timed_pop( xnc.idle, &j, sizeof( j ), 1000 ) == 0 ){
             // ジョブ1つ完了
             inprogress--;
 
@@ -624,29 +634,30 @@ int main( int argc, char *argv[] )
             if( *file ){
                 if( prepare_to_job( &xnc, j, *file ) == 0 ){
                     xnc.algo.fn_init( &xnc, j );
-                    if( queue_push( xnc.read, &j, sizeof( j ) ) == 0 ){
+                    fseek( j->fsrc.fh, 0, SEEK_SET );
+                    if( rqueue_push( xnc.read, &j, sizeof( j ) ) == 0 ){
                         inprogress++;
                     }
                 }
                 file++;
             }
-            queue_giveback( dst );
         }
 
         // 進捗表示
         if( xnc.flags & XNC_F_VERBOSE ){
             char str[128], *path;
-            size_t pos, filled, left;
+            size_t pos = 0, filled, left;
             int progress;
 
-            pos = snprintf( str, sizeof( str ), "\x1b[%dA", lnoff );
-            write( STDOUT_FILENO, str, pos );
-            
+            if( lnoff ){
+                pos = snprintf( str, sizeof( str ), "\x1b[%dA", lnoff );
+                write( STDOUT_FILENO, str, pos );
+            }
+
             for( int i = 0; i < jobs.max; i++ ){
                 progress = atomic_load( &(jobs.slots[i].progress) );
                 filled = progress * XNC_PROGBAR_LEN / 100;
                 left  = progress == 100 ? 0 : XNC_PROGBAR_LEN - filled - 1;
-
                 pos = snprintf( str, sizeof( str ), "\x1b[2K%s %2d [\x1b[32m", xnc_get_mode_name( jobs.slots[i].mode ), i );
                 memset( str + pos, '=', filled );
                 pos += filled;
@@ -675,13 +686,15 @@ int main( int argc, char *argv[] )
             lnoff++;
         }
     }
-    
+
     // 子スレッドはキューからNULLを受け取ると終了するので、スレッドの数だけNULLをキューに入れる
-    for( int i = 0; i < thr.max; i++ ){
+    {
         struct XncJob *j = NULL;
-        queue_push( xnc.read,  &j, sizeof( j ) );
-        queue_push( xnc.write, &j, sizeof( j ) );
-        queue_push( xnc.work,  &j, sizeof( j ) );
+        rqueue_push( xnc.read,  &j, sizeof( j ) );
+        rqueue_push( xnc.write, &j, sizeof( j ) );
+        for( int i = 0; i < jobs.max; i++ ){
+            rqueue_push( xnc.work,  &j, sizeof( j ) );
+        }
     }
 
     // スレッドの終了を待ってから後片付け
@@ -690,13 +703,16 @@ int main( int argc, char *argv[] )
         thrw_destroy( thr.list + i );
     }
 
-    queue_destroy( xnc.read );
-    queue_destroy( xnc.write );
-    queue_destroy( xnc.work );
+    rqueue_destroy( xnc.read );
+    rqueue_destroy( xnc.write );
+    rqueue_destroy( xnc.work );
+    rqueue_destroy( xnc.idle );
     queue_destroy( xnc.error );
 
+    for( int i = 0; i < jobs.max; i++ ) hash_destroy( jobs.slots[i].hs );
     free( thr.list );
     free( jobs.slots );
+    free( xnc.buf_addr );
     free( xnc.ids );
 
     return rv;

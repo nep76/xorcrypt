@@ -1,5 +1,6 @@
 #include "simple_xor.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 struct XncSimpleXor {
@@ -20,22 +21,20 @@ int simple_xor_work( struct XncHash *hs, unsigned char *restrict buf, size_t blo
         buf += sizeof( c->hash );
     }
 
-    return 1;
+    return 0;
 }
 
 int simple_xor_init( const struct Xnc *xnc, struct XncJob *job )
 {
-    struct XncSimpleXor *c;
-
-    c = malloc( sizeof( *c ) );
+    struct XncSimpleXor *c = malloc( sizeof( *c ) );
     if( ! c ) return -1;
 
     switch( job->mode ){
         case XNC_DECODE:
-            job->fsrc.size -= xnc_read_salt( c->salt, sizeof( salt ), job->fsrc.fh ) * sizeof( c->salt );
+            job->fsrc.size -= xnc_read_salt( c->salt, sizeof( c->salt ), job->fsrc.fh ) * sizeof( c->salt );
             break;
         case XNC_ENCODE:
-            xnc_create_salt( job->hs, c->salt, sizeof( c->salt ) );
+            xnc_create_salt( job->hs, &(job->xorshift32), c->salt, sizeof( c->salt ) );
             break;
     }
 
@@ -64,6 +63,8 @@ int simple_xor_finish( const struct Xnc *xnc, struct XncJob *job )
 {
     struct XncSimpleXor *c = job->algo_ctx;
 
+    UNUSED( xnc );
+    
     if( job->mode == XNC_ENCODE ){
         if( ! xnc_write_salt( c->salt, sizeof( c->salt ), job->fdst.fh ) ){
             free( c );
