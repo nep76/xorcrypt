@@ -1,5 +1,5 @@
 CC      ?= gcc
-CFLAGS  ?= -D_FILE_OFFSET_BITS=64 -ffunction-sections -fdata-sections -Wall -Wextra -Werror
+CFLAGS  ?= -D_FILE_OFFSET_BITS=64 -ffunction-sections -fdata-sections -Wall -Wextra
 LDFLAGS ?= -Wl,--gc-sections
 LIBS    =
 
@@ -16,7 +16,8 @@ else
 endif
 
 ifdef WITH_OPTINFO
-	CFLAGS += -fopt-info
+	CFLAGS  += -fopt-info
+	LDFLAGS += -fopt-info
 endif
 
 ifdef WITH_AVX2
@@ -45,7 +46,7 @@ else
 	LIBS += -lcrypto -lpthread
 endif
 
-SRCS += thread/queue.c
+SRCS += thread/queue.c thread/rqueue.c
 
 OBJS = $(SRCS:.c=.o)
 
