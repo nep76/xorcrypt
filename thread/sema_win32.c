@@ -9,7 +9,6 @@ SemaCtx *sema_new( int initial, SemaCtx *reuse )
     SemaCtx *c = reuse ? reuse : malloc( sizeof( *c ) );
     if( c ){
         c->free = reuse ? 0 : 1;
-        
         c->sema = CreateSemaphoreA( NULL, initial, LONG_MAX, NULL );
         if( ! c->sema ){
             if( c->free ) free( c );

@@ -1,6 +1,6 @@
 CC      ?= gcc
 CFLAGS  ?= -D_FILE_OFFSET_BITS=64 -ffunction-sections -fdata-sections -Wall -Wextra
-LDFLAGS ?= -Wl,--gc-sections
+LDFLAGS ?= -Wl,--gc-sections -Wno-free-nonheap-object
 LIBS    =
 
 SUFFIX =
@@ -46,7 +46,7 @@ else
 	LIBS += -lcrypto -lpthread
 endif
 
-SRCS += thread/queue.c thread/rqueue.c
+SRCS += thread/rqueue.c
 
 OBJS = $(SRCS:.c=.o)
 

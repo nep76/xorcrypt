@@ -278,9 +278,8 @@ int thread_read( void *argp )
         job->fsrc.read_bytes = fread( job->buf, 1, read, job->fsrc.fh );
         job->fsrc.cur_offset += job->fsrc.read_bytes;
         if( job->fsrc.read_bytes < XNC_BUF_SIZE && ferror( job->fsrc.fh ) ){
-            char *err = "Failed to read source file.";
-            queue_try_push( xnc->error, err, strlen( err ) + 1 );
             job->rv = 0x80001001;
+            qinfof_try_push( xnc->error, "Failed to read input file: %s", "" );
             rqueue_push( xnc->idle, &job, sizeof( job ) );
             continue;
         }
@@ -300,9 +299,9 @@ int thread_write( void *argp )
         if( ! job ) break;
 
         if( fwrite( job->buf, 1, job->fsrc.read_bytes, job->fdst.fh ) != job->fsrc.read_bytes ){
-            char *err = "Failed to write output file.";
-            queue_try_push( xnc->error, err, strlen( err ) + 1 );
-            job->rv = 0x80001002;
+            char *file = strrchr( job->fdst.path, '/' );
+            if( ! file ) file = job->fdst.path;
+            qinfof_try_push( xnc->error, "Failed to write output file: %s", file );
             rqueue_push( xnc->idle, &job, sizeof( job ) );
             continue;
         }
@@ -339,28 +338,25 @@ static int prepare_to_job( struct Xnc *xnc, struct XncJob *job, char *file )
 {
     int store_len;
     char src_path[PATH_MAX];
-    char *outdir, *dot, *err;
+    char *outdir, *dot;
     struct stat st;
 
     char path_dir[PATH_MAX], path_file[PATH_MAX];
 
     if( ! _get_dir_and_name_by_path( file, path_dir, path_file, PATH_MAX ) ){
-        err = "Failed to parse input file path: %s";
-        queue_try_push( xnc->error, err, strlen( err ) + 1 );
-        goto NEXT;
+        qinfof_try_push( xnc->error, "Failed to parse input path: %s", file );
+        goto SKIP;
     }
 
     if( path_file[0] == '\0' ){
-        err = "Empty source file name specified.";
-        queue_try_push( xnc->error, err, strlen( err ) + 1 );
-        goto NEXT;
+        qinfof_try_push( xnc->error, "Input path is directory: %s", path_dir );
+        goto SKIP;
     }
 
     store_len = snprintf( src_path, PATH_MAX, "%s/%s", path_dir, path_file );
     if( store_len >= PATH_MAX ){
-        err = "Source file path is too long.";
-        queue_try_push( xnc->error, err, strlen( err ) + 1 );
-        goto NEXT;
+        qinfof_try_push( xnc->error, "Input file path is too long: %s", path_file );
+        goto SKIP;
     }
 
     outdir = xnc->outdir ? xnc->outdir : path_dir;
@@ -385,8 +381,7 @@ static int prepare_to_job( struct Xnc *xnc, struct XncJob *job, char *file )
 
     job->fsrc.fh = fopen( src_path, "rb" );
     if( ! job->fsrc.fh ){
-        err = "Failed to open source file: %s";
-        queue_try_push( xnc->error, err, strlen( err ) + 1 );
+        qinfof_try_push( xnc->error, "Failed to open input file: %s", src_path );
         goto NEXT;
     }
 
@@ -395,8 +390,7 @@ static int prepare_to_job( struct Xnc *xnc, struct XncJob *job, char *file )
         case XNC_ENCODE:
             store_len = snprintf( job->fdst.path, PATH_MAX, "%s/%s.%s", outdir, path_file, xnc->ext );
             if( store_len >= PATH_MAX ){
-                err = "Filename too long.";
-                queue_try_push( xnc->error, err, strlen( err ) + 1 );
+                qinfo_try_push( xnc->error, "Filename too long." );
                 goto NEXT;
             }
             break;
@@ -404,14 +398,12 @@ static int prepare_to_job( struct Xnc *xnc, struct XncJob *job, char *file )
             if( dot ) *dot = '\0';
             // ハッシュサイズ+1バイトでもデータがない場合はxncファイルではない
             if( job->fsrc.size < XNC_HASH_SIZE + 1 ){
-                err = "File is too small. Skipped.";
-                queue_try_push( xnc->error, err, strlen( err ) + 1 );
+                qinfo_try_push( xnc->error, "File is too small. Skipped." );
                 goto NEXT;
             }
             store_len = snprintf( job->fdst.path, PATH_MAX, "%s/%s", outdir, path_file );
             if( store_len >= PATH_MAX ){
-                err = "Filename too long.";
-                queue_try_push( xnc->error, err, strlen( err ) + 1 );
+                qinfo_try_push( xnc->error, "Filename too long." );
                 goto NEXT;
             }
             break;
@@ -419,28 +411,24 @@ static int prepare_to_job( struct Xnc *xnc, struct XncJob *job, char *file )
 
     // エラーチェック
     if( strcasecmp( src_path, job->fdst.path ) == 0 ){
-        err = "Source and output paths are the same. Skipped.";
-        queue_try_push( xnc->error, err, strlen( err ) + 1 );
+        qinfo_try_push( xnc->error, "Source and output paths are the same. Skipped." );
         goto NEXT;
     }
 
     if( access( job->fdst.path, F_OK ) == 0 ){
         struct xnc_file_id fuid;
         if( ! _get_file_uid( job->fdst.path, &fuid ) ){
-            err = "Failed to get output file id.";
-            queue_try_push( xnc->error, err, strlen( err ) + 1 );
+            qinfo_try_push( xnc->error, "Failed to get output file id." );
             goto NEXT;
         }
-        for( unsigned int i = 0; i < xnc->id_cnt; i++ ){
+        for( int i = 0; i < xnc->id_cnt; i++ ){
             if( memcmp( &fuid, xnc->ids + i, sizeof( fuid ) ) == 0 ){
-                err = "Output file already exists as input file. Skipped.";
-                queue_try_push( xnc->error, err, strlen( err ) + 1 );
+                qinfof_try_push( xnc->error, "Output file already exists as input file: %s", job->fdst.path );
                 goto NEXT;
             }
         }
         if( ! ( xnc->flags & XNC_F_OVERWRITE ) ){
-            err = "Output path already exists.";
-            queue_try_push( xnc->error, err, strlen( err ) + 1 );
+            qinfo_try_push( xnc->error, "Output path already exists." );
             goto NEXT;
         }
     }
@@ -449,8 +437,7 @@ static int prepare_to_job( struct Xnc *xnc, struct XncJob *job, char *file )
     if( job->fsrc.size > 0 ){
         job->fdst.fh = fopen( job->fdst.path, "wb" );
         if( ! job->fdst.fh ){
-            err = "Failed to open output file: %s";
-            queue_try_push( xnc->error, err, strlen( err ) + 1 );
+            qinfof_try_push( xnc->error, "Failed to open output file: %s", job->fdst.path );
             goto NEXT;
         }
     } else{
@@ -514,7 +501,7 @@ int main( int argc, char *argv[] )
         einfo( "Failed to allocate file id table." );
         return 1;
     }
-    for( unsigned int i = 0; i < xnc.id_cnt; i++ ){
+    for( int i = 0; i < xnc.id_cnt; i++ ){
         if( ! _get_file_uid( argv[args_offset + i], xnc.ids + i ) ){
             einfof( "No such file or directory: \"%s\"", argv[args_offset + i] );
             return 1;
@@ -525,8 +512,10 @@ int main( int argc, char *argv[] )
     file = argv + args_offset;
     
     // スレッドとジョブのテーブルを確保
-    jobs.max   = _get_cpu_cores();
-    thr.max    = jobs.max + 2;
+    jobs.max = _get_cpu_cores();
+    if( jobs.max > xnc.id_cnt ) jobs.max = xnc.id_cnt;
+
+    thr.max  = jobs.max + 2;
 
     // ジョブコンテキストテーブルを確保
     jobs.slots = calloc( jobs.max, sizeof( struct XncJob ) );
@@ -569,9 +558,9 @@ int main( int argc, char *argv[] )
         ! ( xnc.work  = rqueue_new( sizeof( void* ), jobs.max ) ) ||
         ! ( xnc.write = rqueue_new( sizeof( void* ), jobs.max ) ) ||
         ! ( xnc.idle  = rqueue_new( sizeof( void* ), jobs.max ) ) ||
-        ! ( xnc.error = queue_new( 10 ) )
+        ! ( xnc.error = rqueue_new( XNC_ERRBUF_SIZE, 5 ) )
     ){
-        einfo( "Failed to allocate queue." );
+        einfo( "Failed to allocate rqueue." );
         return 1;
     }
 
@@ -595,8 +584,8 @@ int main( int argc, char *argv[] )
 
     // ジョブを使えるだけ使う
     while( *file && slot < jobs.max ){
-        void *err;
         struct XncJob *j = jobs.slots + slot;
+        char errmsg[XNC_ERRBUF_SIZE];
 
         if( prepare_to_job( &xnc, j, *file ) == 0 ){
             xnc.algo.fn_init( &xnc, j );
@@ -607,10 +596,8 @@ int main( int argc, char *argv[] )
             }
         }
 
-        while( ( err = queue_try_pop( xnc.error ) ) ){
-            char *errmsg = (char *)err;
-            printf( "%s\n", errmsg );
-            queue_giveback( err );
+        while( rqueue_try_pop( xnc.error, errmsg, sizeof( errmsg ) ) == 0 ){
+            write( STDERR_FILENO, errmsg, strlen( errmsg ) );
         }
         
         file++;
@@ -620,7 +607,8 @@ int main( int argc, char *argv[] )
     lnoff = 0;
     while( *file || inprogress ){
         struct XncJob *j;
-        void *err;
+        char errmsg[XNC_ERRBUF_SIZE];
+
         //スレッドからの終了通知を待つ
         if( rqueue_timed_pop( xnc.idle, &j, sizeof( j ), 1000 ) == 0 ){
             // ジョブ1つ完了
@@ -628,11 +616,7 @@ int main( int argc, char *argv[] )
 
             xnc.algo.fn_destroy( &xnc, j );
 
-            if( finish_job( j ) != 0 ){
-                err = strrchr( j->fdst.path, '/' );
-                err = err ? err + 1 : j->fdst.path;
-                queue_try_push( xnc.error, err, strlen( err ) + 1 );
-            }
+            finish_job( j );
 
             if( *file ){
                 if( prepare_to_job( &xnc, j, *file ) == 0 ){
@@ -681,11 +665,8 @@ int main( int argc, char *argv[] )
             lnoff = jobs.max;
         }
         
-        while( ( err = queue_try_pop( xnc.error ) ) ){
-            char *errmsg = (char *)err;
+        while( rqueue_try_pop( xnc.error, errmsg, sizeof( errmsg ) ) == 0 ){
             write( STDERR_FILENO, errmsg, strlen( errmsg ) );
-            write( STDERR_FILENO, "\n", 1 );
-            queue_giveback( err );
             lnoff++;
         }
     }
@@ -710,7 +691,7 @@ int main( int argc, char *argv[] )
     rqueue_destroy( xnc.write );
     rqueue_destroy( xnc.work );
     rqueue_destroy( xnc.idle );
-    queue_destroy( xnc.error );
+    rqueue_destroy( xnc.error );
 
     for( int i = 0; i < jobs.max; i++ ) hash_destroy( jobs.slots[i].hs );
     free( thr.list );
