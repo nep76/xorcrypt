@@ -282,6 +282,7 @@ int thread_read( void *argp )
             queue_try_push( xnc->error, err, strlen( err ) + 1 );
             job->rv = 0x80001001;
             rqueue_push( xnc->idle, &job, sizeof( job ) );
+            continue;
         }
 
         rqueue_push( xnc->work, &job, sizeof( job ) );
@@ -303,6 +304,7 @@ int thread_write( void *argp )
             queue_try_push( xnc->error, err, strlen( err ) + 1 );
             job->rv = 0x80001002;
             rqueue_push( xnc->idle, &job, sizeof( job ) );
+            continue;
         }
 
         atomic_store( &(job->progress), (int)( job->fsrc.cur_offset * 100ULL / job->fsrc.size ) );
@@ -627,7 +629,8 @@ int main( int argc, char *argv[] )
             xnc.algo.fn_destroy( &xnc, j );
 
             if( finish_job( j ) != 0 ){
-                err = strrchr( j->fdst.path, '/' ) + 1;
+                err = strrchr( j->fdst.path, '/' );
+                err = err ? err + 1 : j->fdst.path;
                 queue_try_push( xnc.error, err, strlen( err ) + 1 );
             }
 
