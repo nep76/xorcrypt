@@ -6,14 +6,7 @@
 
 SemaCtx *sema_new( int initial, SemaCtx *reuse )
 {
-    SemaCtx *c;
-
-    if( reuse ){
-        c = reuse;
-    } else{
-        c = malloc( sizeof( *c ) );
-    }
-
+    SemaCtx *c = reuse ? reuse : malloc( sizeof( *c ) );
     if( c ){
         c->free = reuse ? 0 : 1;
         

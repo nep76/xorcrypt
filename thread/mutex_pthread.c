@@ -5,14 +5,7 @@
 
 MutexCtx *mutex_new( MutexCtx *reuse )
 {
-    MutexCtx *c;
-
-    if( reuse ){
-        c = reuse;
-    } else{
-        c = malloc( sizeof( *c ) );
-    }
-
+    MutexCtx *c = reuse ? reuse : malloc( sizeof( *c ) );
     if( c ){
         c->free = reuse ? 0 : 1;
         if( pthread_mutex_init( &c->mutex, NULL ) != 0 ){

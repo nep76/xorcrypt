@@ -7,16 +7,7 @@
 #include <time.h>
 #include <inttypes.h>
 
-typedef struct queue_ctx {
-    uint32_t free;
-    
-    SemaCtx  *items;
-    SemaCtx  *slots;
-    MutexCtx *mutex;
-
-    struct queue_node *head;
-    struct queue_node *tail;
-} QueueCtx;
+typedef struct queue_ctx QueueCtx;
 
 QueueCtx *queue_new( int capacity );
 int queue_push( QueueCtx *c, void *data, size_t size );

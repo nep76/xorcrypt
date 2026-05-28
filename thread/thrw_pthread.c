@@ -11,14 +11,7 @@ static void *thread_start( void *c )
 
 ThrwCtx *thrw_new( ThrwMain cb, void *argp, ThrwCtx *reuse )
 {
-    ThrwCtx *c;
-
-    if( ! reuse ){
-        c = malloc( sizeof( *c ) );
-    } else{
-        c = reuse;
-    }
-
+    ThrwCtx *c = reuse ? reuse : malloc( sizeof( *c ) );
     if( c ){
         c->fn_main = cb;
         c->argp    = argp;

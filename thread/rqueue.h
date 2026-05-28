@@ -7,18 +7,7 @@
 #include <time.h>
 #include <inttypes.h>
 
-typedef struct rqueue_ctx {
-    SemaCtx  *items;
-    SemaCtx  *slots;
-    MutexCtx *mutex;
-
-    int off_push;
-    int off_pop;
-
-    int max_chunks;
-    size_t chunk_size;
-    unsigned char *buf;
-} RqueueCtx;
+typedef struct rqueue_ctx RqueueCtx;
 
 RqueueCtx *rqueue_new( size_t size, int cnt );
 int rqueue_push( RqueueCtx *c, void *data, size_t size );
