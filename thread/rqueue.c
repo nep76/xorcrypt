@@ -23,19 +23,14 @@ RqueueCtx *rqueue_new( size_t size, int cnt )
 {
     RqueueCtx *c;
     
-    if( size <= 0 || cnt <= 0 ) return NULL;
     size = ( size + 7 ) & ~7;
+    if( size == 0 || cnt <= 0 || ( size > SIZE_MAX / cnt ) ) return NULL;
     
     c = malloc( sizeof( *c ) + ( size * cnt ) );
-    if(
-        ! c ||
-        ! sema_new( 0, &c->items ) ||
-        ! sema_new( cnt, &c->slots ) ||
-        ! mutex_new( &c->mutex )
-    ){
-        if( c ) free( c );
-        return NULL;
-    }
+    if( ! c ) return NULL;
+    if( ! sema_new( 0, &c->items ) )   goto FAIL_SEMA_ITEMS;
+    if( ! sema_new( cnt, &c->slots ) ) goto FAIL_SEMA_SLOTS;
+    if( ! mutex_new( &c->mutex ) )     goto FAIL_MUTEX;
 
     c->off_pop  = 0;
     c->off_push = 0;
@@ -44,6 +39,14 @@ RqueueCtx *rqueue_new( size_t size, int cnt )
     c->max_chunks = cnt;
 
     return c;
+
+    FAIL_MUTEX:
+        sema_destroy( &c->slots );
+    FAIL_SEMA_SLOTS:
+        sema_destroy( &c->items );
+    FAIL_SEMA_ITEMS:
+        free( c );
+        return NULL;
 }
 
 static int _rqueue_push( RqueueCtx *c, void *data, size_t size )

@@ -9,22 +9,7 @@
 
 #include "xorcrypt.h"
 #include "thread/thrw.h"
-#include "thread/queue.h"
 #include "thread/rqueue.h"
-
-#define XNC_DEFAULT_EXT "xnc"
-
-#define XNC_PROGBAR_LEN 20
-
-#define XNC_HASH_SIZE   32 // bytes
-#define XNC_SALT_SIZE   32 // bytes
-#define XNC_MAX_PASSWD  64 // char
-#define XNC_BUF_SIZE    4096000 //4MB
-#define XNC_BUF_ALIGN   32 // AVX2
-
-#define XNC_STRETCH_TIMES 100000
-#define XNC_SEED_STATE    0xC0DECAFE // ストリームに混ぜる定数 state用
-#define XNC_SEED_KS       0x00C0FFEE // ストリームに混ぜる定数 ks用
 
 #include <limits.h>
 #ifdef _WIN32
@@ -41,6 +26,21 @@
 #define xnc_be64( x ) htobe64( x )
 #define xnc_be32( x ) htobe32( x )
 #endif
+
+#define XNC_DEFAULT_EXT "xnc"
+
+#define XNC_PROGBAR_LEN 20
+
+#define XNC_HASH_SIZE   32 // bytes
+#define XNC_SALT_SIZE   32 // bytes
+#define XNC_MAX_PASSWD  64 // char
+#define XNC_BUF_SIZE    4096000 //4MB
+#define XNC_BUF_ALIGN   32 // AVX2
+#define XNC_ERRBUF_SIZE 256
+
+#define XNC_STRETCH_TIMES 100000
+#define XNC_SEED_STATE    0xC0DECAFE // ストリームに混ぜる定数 state用
+#define XNC_SEED_KS       0x00C0FFEE // ストリームに混ぜる定数 ks用
 
 #if ( XNC_BUF_SIZE % XNC_BUF_ALIGN ) != 0
 #error "XNC_BUF_SIZE must be a multiple of XNC_BUF_ALIGN"
@@ -70,11 +70,10 @@ struct XncAlgo {
 };
 
 struct Xnc {
-    RqueueCtx *read, *work, *write, *idle;
-    QueueCtx  *error;
+    RqueueCtx *read, *work, *write, *idle, *error;
 
     struct xnc_file_id *ids;
-    unsigned int       id_cnt;
+    int                id_cnt;
 
     unsigned char *buf_addr;
 

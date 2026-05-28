@@ -39,4 +39,3 @@ int mutex_destroy( MutexCtx *c )
     }
     return rv ? 0 : -1;
 }
-

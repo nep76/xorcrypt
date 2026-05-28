@@ -2,11 +2,32 @@
 
 #include <stdarg.h>
 
-void _info( FILE *stream, const char *format, ... )
+int qinfo( RqueueCtx *c, info_fn_rqueue_push fn_push, const char *fmt, ... )
+{
+    char buf[XNC_ERRBUF_SIZE];
+    int pos;
+    va_list ap;
+    va_start( ap, fmt );
+    pos = vsnprintf( buf, sizeof( buf ), fmt, ap );
+    va_end( ap );
+
+    if( pos < 0 ){
+        return -1;
+    } else if( (size_t)pos >= sizeof( buf ) ){
+        pos = sizeof( buf ) - 2;
+    }
+
+    buf[pos++] = '\n';
+    buf[pos++] = '\0';
+
+    return fn_push( c, buf, pos );
+}
+
+void _info( FILE *stream, const char *fmt, ... )
 {
     va_list ap;
-    va_start( ap, format );
-    vfprintf( stream, format, ap );
+    va_start( ap, fmt );
+    vfprintf( stream, fmt, ap );
     va_end( ap );
     fputc( '\n', stream );
 }
