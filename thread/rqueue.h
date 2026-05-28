@@ -8,8 +8,6 @@
 #include <inttypes.h>
 
 typedef struct rqueue_ctx {
-    uint32_t free;
-    
     SemaCtx  *items;
     SemaCtx  *slots;
     MutexCtx *mutex;
