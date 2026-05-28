@@ -86,7 +86,7 @@ Windowsの右クリックの「送る」から使うことを想定している�
 あくまで機械的な解析に対するものであってデータを保護するものではないので可搬性を重視してこの設計になっています。
 
 ## Demo
-https://github.com/user-attachments/assets/f1b2477a-7146-47a0-938f-bbae147bfaf9
+https://github.com/user-attachments/assets/9bce0da0-1e08-4b59-8294-557cf7bcf493
 
 ## seed-xor
 `seed-xor`は`-a`オプションで指定できるもう一つの変換アルゴリズムでSHA256を用いた自作の簡易ストリーム暗号のようなものです。冒頭で「*`crypt`と名前がついているが暗号化はしない*」と説明しましたが、このモードは一応暗号的な処理を行っています。
