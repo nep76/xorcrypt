@@ -41,6 +41,7 @@
 #define XNC_STRETCH_TIMES 100000
 #define XNC_SEED_STATE    0xC0DECAFE // ストリームに混ぜる定数 state用
 #define XNC_SEED_KS       0x00C0FFEE // ストリームに混ぜる定数 ks用
+#define XNC_SEED_MAC      0x03ACBEEF // MAC用定数
 
 #if ( XNC_BUF_SIZE % XNC_BUF_ALIGN ) != 0
 #error "XNC_BUF_SIZE must be a multiple of XNC_BUF_ALIGN"
@@ -110,10 +111,11 @@ struct XncJob {
     uint32_t   xorshift32;
 };
 
-char *xnc_get_mode_name( enum XncMode mode );
+char *xnc_get_mode_name( struct XncJob *job );
 void xnc_salt_seed_gen( uint32_t *xorshift32_seed, unsigned char *buf, size_t len );
-void xnc_create_salt( struct XncHash *hs, uint32_t *xorshift32, unsigned char *output, size_t len );
-int  xnc_read_salt( unsigned char *output, size_t len, FILE *fp );
-int  xnc_write_salt( const unsigned char *salt, size_t len, FILE *fp );
+void xnc_set_algo_ctx( struct XncJob *job, void *ctx );
+void xnc_create_salt( struct XncJob *job, unsigned char *output, size_t len );
+int  xnc_read_salt( struct XncJob *job, unsigned char *output, size_t len );
+int  xnc_write_salt( struct XncJob *job, const unsigned char *salt, size_t len );
 
 #endif

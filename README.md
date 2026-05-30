@@ -39,9 +39,9 @@ Usage: xorcrypt [-ednfv] [-o dir] [-x ext] [-p passwd ] [-a xor|seed-xor] file [
 （無指定で自動判別）
 * `-f`: 出力先ファイルが既に存在していても上書きすることを許可
 * `-v`: 処理経過の詳細表示モード
-* `-o`: 出力先ディレクトリ  （デフォルトはカレントディレクトリ）
+* `-o`: 出力先ディレクトリ  （デフォルトは入力ファイルと同じディレクトリ）
 * `-x`: スクランブルしたファイルまたは自動判別に使用する拡張子（デフォルトはxnc）
-* `-p`: パスワード（パスワードなしも可能）
+* `-p`: パスワード（最大64バイト、パスワードなしも可能）
 * `-a`: XOR変換アルゴリズム
   - xor: 単純変換モード（デフォルト）
   - seed-xor: 限定的用途（[seed-xor](#seed-xor)参照）
@@ -115,39 +115,44 @@ SHA256の拡散効果で単純XORよりもパターンが隠ぺいされやす�
 一応復号するための手順と概念的なコードを書いておきます。コード中でハッシュ関数に入力する整数値はすべてビッグエンディアンです。(BE32やBE64と表記します)
 
 1. まずファイルの末尾に記録されている32バイトの`salt`を取り出します。
-1. 取り出したバイト列と設定したパスワードを使って以下の方法で初期ハッシュを生成します。
+1. 取り出した`salt`と設定した`password`(最大64バイト)を使って以下の方法で`pre-stateを生成します。
 ```text
-pre state = SHA256( BE32(0xC0DECAFE) || 0(パディング28バイト分) || BE32(0) || salt || password )
+pre-state = SHA256( BE32(0xC0DECAFE) || 0(パディング28バイト分) || BE32(0) || salt || password )
 ```
-3. 次にこの初期ハッシュを使ってHMAC-SHA256で再ハッシュ化を100,000回繰り返して簡易鍵伸長をします。もし`-n`スイッチで鍵伸長せずに処理したデータの場合はこの処理を丸ごと飛ばしてください。
+3. 次にこの`pre-state`をHMAC-SHA256で再ハッシュ化を100,000回繰り返して簡易鍵伸長をします。もし`-n`スイッチで鍵伸長せずに処理したデータの場合はこの工程を丸ごと飛ばしてください。
 ```text
-for( uint32 i = 0...99999 )
-    state = HMAC-SHA256( key=state,  message=state || BE32(i) || salt || password )
+for( 0 <= i < 100000 )
+    pre-state = HMAC-SHA256( key=pre-state, message=BE32(i) )
 ```
-4. 鍵伸長を終えた鍵を以下のようにハッシュ化して初期`state`を生成します。
+4. 鍵伸長を終えた`pre-state`を以下のようにハッシュ化して初期`state`を生成します。
 ```text
-initial state = HMAC-SHA256( key=state, message=BE32(0xC0DECAFE) || BE64(0) )
+initial state = HMAC-SHA256( key=pre-state, message=BE32(0xC0DECAFE) || BE64(0) )
 ```
 5. この`state`を使って`keystream`を生成し、実際にXOR演算をしていきます。ただし、SHA256のビット長である32バイト処理するごとにこれらを更新します。
 ```text
-// カウンターを初期化
-cnt = 0
+// カウンターを 1 で初期化
+counter = 1
 
 // 1ブロック32バイトとしてファイルが何ブロックあるか計算
-blocks = trunc( ( filesize + 31 ) / 32 ) 
+blocks = ceil( filesize / 32 )
 
 // ファイル全体に対して処理
-for( i = 0; i < blocks; i = i + 1 )
-    keystream = HMAC-SHA256( key=state, message=BE32(0x00C0FFEE) || BE64(cnt) )
+for( 0 <= i = < blocks )
+    // ksとstateを更新してカウンターを進める
+    keystream = HMAC-SHA256( key=state, message=BE32(0x00C0FFEE) || BE64(counter) )
+    state     = HMAC-SHA256( key=state, message=BE32(0xC0DECAFE) || BE64(counter) )
+    counter   = counter + 1
 
-    // ファイル終端の端数は上手く帳尻あわせてください
-    for( j = 0; j < 32; j = j + 1 )
-        plaintext = chiphertext[j] ^ keystream[j]
+    offset = i * 32 // ファイルオフセット値
+    length = 32     // 読み出しサイズ
     
-    chiphertext = chiphertext + 32;
-
-    cnt = cnt + 1
-    state = HMAC-SHA256( key=state, message=BE32(0xC0DECAFE) || BE64(cnt) )
+    // ファイルサイズを超過したら残りのサイズに合わせる
+    if( offset + length > filesize )
+        length = filesize - offset;
+    
+    // lengthバイト変換
+    for( 0 <= j = < length )
+        plaintext[offset + j] = ciphertext[offset + j] ^ keystream[j]
 ```
 6. バグがなければこれで復号できる…はず。
 </details>
