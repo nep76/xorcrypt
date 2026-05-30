@@ -31,10 +31,13 @@ int simple_xor_init( const struct Xnc *xnc, struct XncJob *job )
 
     switch( job->mode ){
         case XNC_DECODE:
-            job->fsrc.size -= xnc_read_salt( c->salt, sizeof( c->salt ), job->fsrc.fh ) * sizeof( c->salt );
+            if( ! xnc_read_salt( job, c->salt, sizeof( c->salt ) ) ){
+                free( c );
+                return - 1;
+            }
             break;
         case XNC_ENCODE:
-            xnc_create_salt( job->hs, &(job->xorshift32), c->salt, sizeof( c->salt ) );
+            xnc_create_salt( job, c->salt, sizeof( c->salt ) );
             break;
     }
 
@@ -54,7 +57,7 @@ int simple_xor_init( const struct Xnc *xnc, struct XncJob *job )
     }
 
     // jobにコンテキストを紐づけ
-    job->algo_ctx = c;
+    xnc_set_algo_ctx( job, c );
 
     return 0;
 }
@@ -66,7 +69,7 @@ int simple_xor_finish( const struct Xnc *xnc, struct XncJob *job )
     UNUSED( xnc );
     
     if( job->mode == XNC_ENCODE ){
-        if( ! xnc_write_salt( c->salt, sizeof( c->salt ), job->fdst.fh ) ){
+        if( ! xnc_write_salt( job, c->salt, sizeof( c->salt ) ) ){
             free( c );
             return -1;
         }

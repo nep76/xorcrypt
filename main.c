@@ -145,13 +145,18 @@ static void _usage( char *path )
         name = XNC_NAME;
     }
     einfof( "Xor deNCrypter %s", XNC_VERSION );
-    einfof( "Usage: %s [-ednfv] [-a xor|seed-xor] [-p passwd] [-o dir] [-x ext] file [file ...]", name );
+    einfof( "Usage: %s [-ednfv] [-o dir] [-x ext] [-p passwd] [-a xor|seed-xor] file [file ...]", name );
 }
 
-char *xnc_get_mode_name( enum XncMode mode )
+char *xnc_get_mode_name( struct XncJob *job )
 {
     static char *mode_str[] = { "DECODE", "ENCODE" };
-    return mode_str[mode];
+    return mode_str[job->mode];
+}
+
+void xnc_set_algo_ctx( struct XncJob *job, void *ctx )
+{
+    job->algo_ctx = ctx;
 }
 
 // 終端にNULLを書きこまない
@@ -160,28 +165,28 @@ void xnc_salt_seed_gen( uint32_t *xorshift32_seed, unsigned char *buf, size_t le
     while( len-- ) *buf++ = xorshift32( xorshift32_seed ) & 0xFF;
 }
 
-void xnc_create_salt( struct XncHash *hs, uint32_t *xorshift32_seed, unsigned char *output, size_t len )
+void xnc_create_salt( struct XncJob *job, unsigned char *output, size_t len )
 {
-    xnc_salt_seed_gen( xorshift32_seed, output, len );
-    hash_sha256( hs, output, len, output );
+    xnc_salt_seed_gen( &job->xorshift32, output, len );
+    hash_sha256( job->hs, output, len, output );
 }
 
-int xnc_read_salt( unsigned char *output, size_t len, FILE *fp )
+int xnc_read_salt( struct XncJob *job, unsigned char *output, size_t len )
 {
     size_t rv = 0;
-    if( fseek( fp, -( len ), SEEK_END ) == 0 ){
-        rv = fread( output, 1, len, fp );
+    if( fseek( job->fsrc.fh, -( len ), SEEK_END ) == 0 ){
+        if( ( rv = fread( output, len, 1, job->fsrc.fh ) ) ) job->fsrc.size -= len;
     }
-    return (int)( rv / len );
+    return rv;
 }
 
-int xnc_write_salt( const unsigned char *salt, size_t len, FILE *fp )
+int xnc_write_salt( struct XncJob *job, const unsigned char *salt, size_t len )
 {
     size_t rv = 0;
-    if( fseek( fp, 0, SEEK_END ) == 0 ){
-        rv = fwrite( salt, 1, len, fp );
+    if( fseek( job->fdst.fh, 0, SEEK_END ) == 0 ){
+        rv = fwrite( salt, len, 1, job->fdst.fh );
     }
-    return (int)( rv / len );
+    return rv;
 }
 
 static int parse_args( struct Xnc *xnc, int argc, char *argv[] )
@@ -327,8 +332,13 @@ int thread_worker( void *argp )
     while( rqueue_pop( xnc->work, &job, sizeof( job ) ) == 0 ){
         if( ! job ) break;
 
-        job->rv = xnc->algo.fn_xor( job->hs, job->buf, ( job->fsrc.read_bytes + 31 ) / 32, job->algo_ctx );
-        rqueue_push( xnc->write, &job, sizeof( job ) );
+        job->rv = job->rv = xnc->algo.fn_xor( job->hs, job->buf, ( job->fsrc.read_bytes + 31 ) / 32, job->algo_ctx );
+        if( job->rv == 0 ){
+            rqueue_push( xnc->write, &job, sizeof( job ) );
+        } else{
+            qinfof_try_push( xnc->error, "Failed to process (worker): %s", job->fdst.path );
+            rqueue_push( xnc->idle, &job, sizeof( job ) );
+        }
     }
 
     return 0;
@@ -580,7 +590,8 @@ int main( int argc, char *argv[] )
     }
     
     // 進捗表示準備
-   // if( xnc.flags & XNC_F_VERBOSE ) printf( "\n" );
+   fflush( stdout );
+   fflush( stderr );
 
     // ジョブを使えるだけ使う
     while( *file && slot < jobs.max ){
@@ -588,11 +599,15 @@ int main( int argc, char *argv[] )
         char errmsg[XNC_ERRBUF_SIZE];
 
         if( prepare_to_job( &xnc, j, *file ) == 0 ){
-            xnc.algo.fn_init( &xnc, j );
-            fseek( j->fsrc.fh, 0, SEEK_SET );
-            if( rqueue_push( xnc.read, &j, sizeof( j ) ) == 0 ){
-                inprogress++;
-                slot++;
+            if( ( j->rv = xnc.algo.fn_init( &xnc, j ) ) ){
+                fseek( j->fsrc.fh, 0, SEEK_SET );
+                if( rqueue_push( xnc.read, &j, sizeof( j ) ) == 0 ){
+                    inprogress++;
+                    slot++;
+                }
+            } else{
+                finish_job( j );
+                qinfof_try_push( xnc.error, "Failed to process(init): %s", *file );
             }
         }
 
@@ -620,11 +635,15 @@ int main( int argc, char *argv[] )
 
             if( *file ){
                 if( prepare_to_job( &xnc, j, *file ) == 0 ){
-                    xnc.algo.fn_init( &xnc, j );
-                    fseek( j->fsrc.fh, 0, SEEK_SET );
-                    if( rqueue_push( xnc.read, &j, sizeof( j ) ) == 0 ){
-                        inprogress++;
+                    if( ( j->rv = xnc.algo.fn_init( &xnc, j ) ) ){
+                        fseek( j->fsrc.fh, 0, SEEK_SET );
+                        if( rqueue_push( xnc.read, &j, sizeof( j ) ) == 0 ){
+                            inprogress++;
+                        }
                     }
+                } else{
+                    finish_job( j );
+                    qinfof_try_push( xnc.error, "Failed to process(init): %s", *file );
                 }
                 file++;
             }
@@ -645,7 +664,7 @@ int main( int argc, char *argv[] )
                 progress = atomic_load( &(jobs.slots[i].progress) );
                 filled = progress * XNC_PROGBAR_LEN / 100;
                 left  = progress == 100 ? 0 : XNC_PROGBAR_LEN - filled - 1;
-                pos = snprintf( str, sizeof( str ), "\x1b[2K%s %2d [\x1b[32m", xnc_get_mode_name( jobs.slots[i].mode ), i );
+                pos = snprintf( str, sizeof( str ), "\x1b[2K%s %2d [\x1b[32m", xnc_get_mode_name( jobs.slots + i ), i );
                 memset( str + pos, '=', filled );
                 pos += filled;
 
