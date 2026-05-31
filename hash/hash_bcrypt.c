@@ -1,4 +1,5 @@
 #include "../hash.h"
+#include "../info.h"
 
 #include <stdlib.h>
 #include <string.h>

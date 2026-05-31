@@ -115,7 +115,7 @@ SHA256の拡散効果で単純XORよりもパターンが隠ぺいされやす�
 一応復号するための手順と概念的なコードを書いておきます。コード中でハッシュ関数に入力する整数値はすべてビッグエンディアンです。(BE32やBE64と表記します)
 
 1. まずファイルの末尾に記録されている32バイトの`salt`を取り出します。
-1. 取り出した`salt`と設定した`password`(最大64バイト)を使って以下の方法で`pre-stateを生成します。
+2. 取り出した`salt`と設定した`password`(最大64バイト)を使って以下の方法で`pre-stateを生成します。
 ```text
 pre-state = SHA256( BE32(0xC0DECAFE) || 0(パディング28バイト分) || BE32(0) || salt || password )
 ```
@@ -137,7 +137,7 @@ counter = 1
 blocks = ceil( filesize / 32 )
 
 // ファイル全体に対して処理
-for( 0 <= i = < blocks )
+for( 0 <= i < blocks )
     // ksとstateを更新してカウンターを進める
     keystream = HMAC-SHA256( key=state, message=BE32(0x00C0FFEE) || BE64(counter) )
     state     = HMAC-SHA256( key=state, message=BE32(0xC0DECAFE) || BE64(counter) )
@@ -151,7 +151,7 @@ for( 0 <= i = < blocks )
         length = filesize - offset;
     
     // lengthバイト変換
-    for( 0 <= j = < length )
+    for( 0 <= j < length )
         plaintext[offset + j] = ciphertext[offset + j] ^ keystream[j]
 ```
 6. バグがなければこれで復号できる…はず。

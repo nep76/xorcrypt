@@ -73,16 +73,6 @@ static int _get_file_uid( const char *path, struct xnc_file_id *id )
 #endif
 }
 
-/* George Marsaglia の Xorshift RNG */
-static uint32_t xorshift32( uint32_t *state )
-{
-	uint32_t x = *state;
-	x ^= x << 13;
-	x ^= x >> 17;
-	x ^= x << 5;
-	return ( *state = x );
-}
-
 // パスをディレクトリとファイル名に分けて正規化
 static int _get_dir_and_name_by_path( const char *src, char *dst_dir, char *dst_name, size_t max_len )
 {
@@ -159,15 +149,25 @@ void xnc_set_algo_ctx( struct XncJob *job, void *ctx )
     job->algo_ctx = ctx;
 }
 
-// 終端にNULLを書きこまない
-void xnc_salt_seed_gen( uint32_t *xorshift32_seed, unsigned char *buf, size_t len )
+/* George Marsaglia の Xorshift RNG */
+static uint64_t _xorshift64( uint64_t *state )
 {
-    while( len-- ) *buf++ = xorshift32( xorshift32_seed ) & 0xFF;
+	uint64_t x = *state;
+	x ^= x << 13;
+	x ^= x >> 7;
+	x ^= x << 17;
+	return ( *state = x * RNG_WEYL_CONST64 );
+}
+
+// 終端にNULLを書きこまない
+void xnc_salt_seed_gen( uint64_t *xorshift_seed, unsigned char *buf, size_t len )
+{
+    while( len-- ) *buf++ = _xorshift64( xorshift_seed ) & 0xFF;
 }
 
 void xnc_create_salt( struct XncJob *job, unsigned char *output, size_t len )
 {
-    xnc_salt_seed_gen( &job->xorshift32, output, len );
+    xnc_salt_seed_gen( &job->xorshift, output, len );
     hash_sha256( job->hs, output, len, output );
 }
 
@@ -283,7 +283,7 @@ int thread_read( void *argp )
         job->fsrc.read_bytes = fread( job->buf, 1, read, job->fsrc.fh );
         job->fsrc.cur_offset += job->fsrc.read_bytes;
         if( job->fsrc.read_bytes < XNC_BUF_SIZE && ferror( job->fsrc.fh ) ){
-            job->rv = 0x80001001;
+            job->rv = -1;
             qinfof_try_push( xnc->error, "Failed to read input file: %s", "" );
             rqueue_push( xnc->idle, &job, sizeof( job ) );
             continue;
@@ -332,11 +332,11 @@ int thread_worker( void *argp )
     while( rqueue_pop( xnc->work, &job, sizeof( job ) ) == 0 ){
         if( ! job ) break;
 
-        job->rv = job->rv = xnc->algo.fn_xor( job->hs, job->buf, ( job->fsrc.read_bytes + 31 ) / 32, job->algo_ctx );
+        job->rv = xnc->algo.fn_xor( job->hs, job->buf, ( job->fsrc.read_bytes + 31 ) / 32, job->algo_ctx );
         if( job->rv == 0 ){
             rqueue_push( xnc->write, &job, sizeof( job ) );
         } else{
-            qinfof_try_push( xnc->error, "Failed to process (worker): %s", job->fdst.path );
+            qinfof_try_push( xnc->error, "Failed to %s job (code %x): %s", xnc->algo.name, job->rv, job->fdst.path );
             rqueue_push( xnc->idle, &job, sizeof( job ) );
         }
     }
@@ -551,15 +551,16 @@ int main( int argc, char *argv[] )
     // ジョブ用作業領域をアラインを揃えて設定
     // ジョブ用ハッシュコンテキストを初期化
     // ジョブ用簡易乱数シード初期化
-    jobs.slots[0].buf        = (unsigned char *)MEMORY_ALIGN_ADDR( XNC_BUF_ALIGN, xnc.buf_addr );
-    jobs.slots[0].hs         = hash_init();
-    jobs.slots[0].xorshift32 = (uint32_t)time(NULL); 
-    if( jobs.slots[0].xorshift32 == 0 ) jobs.slots[0].xorshift32 = 1;
-    for( int i = 1; i < jobs.max; i++ ){
-        jobs.slots[i].buf        = jobs.slots[i - 1].buf + XNC_BUF_SIZE;
+    jobs.slots[0].buf      = (unsigned char *)MEMORY_ALIGN_ADDR( XNC_BUF_ALIGN, xnc.buf_addr );
+    jobs.slots[0].xorshift = ((uint64_t)time(NULL) << 32 ) ^ (uint64_t)clock();
+    for( int i = 0; i < jobs.max; i++ ){
+        jobs.slots[i].buf        = jobs.slots[0].buf + ( XNC_BUF_SIZE * i );
         jobs.slots[i].hs         = hash_init();
-        jobs.slots[i].xorshift32 = ( ( jobs.slots[0].xorshift32 << 16 ) | ( jobs.slots[0].xorshift32 >>16 ) ) ^ (uint32_t)i;
-        if( jobs.slots[i].xorshift32 == 0 ) jobs.slots[i].xorshift32 = i + 1;
+        jobs.slots[i].xorshift   = jobs.slots[0].xorshift ^ ( RNG_WEYL_CONST64 * ( (uint64_t)i + 1 ) );
+        if( jobs.slots[i].xorshift == 0 ) jobs.slots[i].xorshift = i + 1;
+
+        // 偏りを紛らわすために5回くらい回す
+        for( int j = 0; j < 5; j++ ) _xorshift64( &jobs.slots[i].xorshift );
     }
 
     // キューを作成
@@ -599,7 +600,7 @@ int main( int argc, char *argv[] )
         char errmsg[XNC_ERRBUF_SIZE];
 
         if( prepare_to_job( &xnc, j, *file ) == 0 ){
-            if( ( j->rv = xnc.algo.fn_init( &xnc, j ) ) ){
+            if( ( j->rv = xnc.algo.fn_init( &xnc, j ) ) == 0 ){
                 fseek( j->fsrc.fh, 0, SEEK_SET );
                 if( rqueue_push( xnc.read, &j, sizeof( j ) ) == 0 ){
                     inprogress++;
@@ -607,7 +608,7 @@ int main( int argc, char *argv[] )
                 }
             } else{
                 finish_job( j );
-                qinfof_try_push( xnc.error, "Failed to process(init): %s", *file );
+                qinfof_try_push( xnc.error, "Failed to %s init (code %x): %s", xnc.algo.name, j->rv, *file );
             }
         }
 
@@ -635,7 +636,7 @@ int main( int argc, char *argv[] )
 
             if( *file ){
                 if( prepare_to_job( &xnc, j, *file ) == 0 ){
-                    if( ( j->rv = xnc.algo.fn_init( &xnc, j ) ) ){
+                    if( ( j->rv = xnc.algo.fn_init( &xnc, j ) ) == 0 ){
                         fseek( j->fsrc.fh, 0, SEEK_SET );
                         if( rqueue_push( xnc.read, &j, sizeof( j ) ) == 0 ){
                             inprogress++;
@@ -643,7 +644,7 @@ int main( int argc, char *argv[] )
                     }
                 } else{
                     finish_job( j );
-                    qinfof_try_push( xnc.error, "Failed to process(init): %s", *file );
+                    qinfof_try_push( xnc.error, "Failed to %s init (code %x): %s", xnc.algo.name, j->rv, *file );
                 }
                 file++;
             }
