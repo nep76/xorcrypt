@@ -1,4 +1,5 @@
 #include "../hash.h"
+#include "../info.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -38,7 +39,7 @@ struct XncHash *hash_init()
     return h;
 
     ABORT:
-        einfof( "Failed to initialize SHA256. OpenSSL says: %s", ERR_error_string( ERR_get_error(), NULL ) );
+        einfof( "Aborting. Failed to initialize SHA256. OpenSSL says: %s", ERR_error_string( ERR_get_error(), NULL ) );
         exit( 1 );
 }
 
@@ -60,7 +61,7 @@ void hash_sha256( struct XncHash *hash,
         ! EVP_DigestUpdate( hash->sha256.ctx, msg, len )            ||
         ! EVP_DigestFinal_ex( hash->sha256.ctx, output, NULL )
     ){
-        einfof( "Failed to calculate SHA256. OpenSSL says: %s", ERR_error_string( ERR_get_error(), NULL ) );
+        einfof( "Aborting. Failed to calculate SHA256. OpenSSL says: %s", ERR_error_string( ERR_get_error(), NULL ) );
         exit( 1 );
     }
 }
@@ -74,10 +75,10 @@ void hash_sha256hmac( struct XncHash *hash,
 {
     if(
         ! EVP_MAC_init( hash->hmac_sha256.ctx, key, key_len, hash->hmac_sha256.params ) ||
-        ! EVP_MAC_update( hash->hmac_sha256.ctx, msg, msg_len )                          ||
+        ! EVP_MAC_update( hash->hmac_sha256.ctx, msg, msg_len )                         ||
         ! EVP_MAC_final( hash->hmac_sha256.ctx, output, NULL, XNC_HASH_SIZE )
     ){
-        einfof( "Failed to calculate SHA256. OpenSSL says: %s", ERR_error_string( ERR_get_error(), NULL ) );
+        einfof( "Aborting. Failed to calculate HMAC-SHA256. OpenSSL says: %s", ERR_error_string( ERR_get_error(), NULL ) );
         exit( 1 );
     }        
 }

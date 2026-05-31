@@ -127,7 +127,7 @@ int seed_xor_init( const struct Xnc *xnc, struct XncJob *job )
         case XNC_DECODE:
             if( ! xnc_read_salt( job, c->salt, sizeof( c->salt ) ) ){
                 free( c );
-                return -1;
+                return -2;
             }
             break;
         case XNC_ENCODE:
