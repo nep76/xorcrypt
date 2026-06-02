@@ -18,9 +18,13 @@
 
 #define MEMORY_ALIGN_ADDR( align, addr ) ( ( (uintptr_t)( addr ) + ( align ) - 1 ) & ( ~( (uintptr_t)( align ) - 1 ) ) )
 
-struct xnc_file_id {
-    uint64_t vid;
-    uint64_t fid;
+struct XncFile {
+    const char *path;
+    off_t size;
+    struct {
+        uint64_t v;
+        uint64_t f;
+    } id;
 };
 
 // ワイルドカード展開 (Mingw用)
@@ -47,27 +51,31 @@ static int _get_cpu_cores()
 #endif
 }
 
-static int _get_file_uid( const char *path, struct xnc_file_id *id )
+static int _get_file_info( const char *path, struct XncFile *f )
 {
+    f->path = path;
+    
 #ifdef _WIN32
     HANDLE h;
     BY_HANDLE_FILE_INFORMATION fi;
 
-    h = CreateFileA( path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL );
+    h = CreateFileA( f->path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL );
     if( h == INVALID_HANDLE_VALUE ) return 0;
 
     GetFileInformationByHandle( h, &fi );
-    id->vid = (uint64_t)fi.dwVolumeSerialNumber;
-    id->fid = (uint64_t)(( (uint64_t)fi.nFileIndexHigh << 32 ) | fi.nFileIndexLow);
+    f->size = ((off_t)fi.nFileSizeHigh << 32) | fi.nFileSizeLow;
+    f->id.v  = fi.dwVolumeSerialNumber;
+    f->id.f  = ((uint64_t)fi.nFileIndexHigh << 32) | fi.nFileIndexLow;
     CloseHandle( h );
 
     return 1;
 #else
     struct stat st;
-    if( stat( path, &st ) != 0 ) return 0;
+    if( stat( f->path, &st ) != 0 ) return 0;
 
-    id->vid = (uint64_t)st.st_dev;
-    id->fid = (uint64_t)st.st_ino;
+    f->size = st.st_size;
+    f->id.v  = st.st_dev;
+    f->id.f  = st.st_ino;
 
     return 1;
 #endif
@@ -344,7 +352,7 @@ int thread_worker( void *argp )
     return 0;
 }
 
-static int prepare_to_job( struct Xnc *xnc, struct XncJob *job, char *file )
+static int prepare_to_job( struct Xnc *xnc, struct XncJob *job, const char *file )
 {
     int store_len;
     char src_path[PATH_MAX];
@@ -426,13 +434,13 @@ static int prepare_to_job( struct Xnc *xnc, struct XncJob *job, char *file )
     }
 
     if( access( job->fdst.path, F_OK ) == 0 ){
-        struct xnc_file_id fuid;
-        if( ! _get_file_uid( job->fdst.path, &fuid ) ){
+        struct XncFile f;
+        if( ! _get_file_info( job->fdst.path, &f ) ){
             qinfo_try_push( xnc->error, "Failed to get output file id." );
             goto NEXT;
         }
-        for( int i = 0; i < xnc->id_cnt; i++ ){
-            if( memcmp( &fuid, xnc->ids + i, sizeof( fuid ) ) == 0 ){
+        for( int i = 0; i < xnc->file.cnt; i++ ){
+            if( memcmp( &f.id, &xnc->file.list[i].id, sizeof( f.id ) ) == 0 ){
                 qinfof_try_push( xnc->error, "Output file already exists as input file: %s", job->fdst.path );
                 goto NEXT;
             }
@@ -482,10 +490,20 @@ static int finish_job( struct XncJob *job )
     return job->rv;
 }
 
+static int _sort_by_fsize( const void *a, const void *b )
+{
+    const struct XncFile *f_a = *(struct XncFile **)a;
+    const struct XncFile *f_b = *(struct XncFile **)b;
+
+    if( f_b->size > f_a->size ) return 1;
+    if( f_b->size < f_a->size ) return -1;
+    return 0;
+}
+
 int main( int argc, char *argv[] )
 {
     int rv = 0, args_offset, slot = 0, inprogress = 0, lnoff = 0;
-    char **file;
+    struct XncFile **file;
 
     struct {
         ThrwCtx *list;
@@ -505,25 +523,29 @@ int main( int argc, char *argv[] )
     }
 
     // 衝突検知用のファイル識別子リストを作成
-    xnc.id_cnt = argc - args_offset;
-    xnc.ids = malloc( sizeof( struct xnc_file_id ) * xnc.id_cnt );
-    if( ! xnc.ids ){
+    xnc.file.cnt = argc - args_offset;
+    xnc.file.list = malloc( sizeof( struct XncFile ) * xnc.file.cnt );
+    xnc.file.sorted = malloc( sizeof( struct XncFile ) * ( xnc.file.cnt + 1 ) );
+    if( ! xnc.file.list || ! xnc.file.sorted ){
         einfo( "Failed to allocate file id table." );
         return 1;
     }
-    for( int i = 0; i < xnc.id_cnt; i++ ){
-        if( ! _get_file_uid( argv[args_offset + i], xnc.ids + i ) ){
-            einfof( "No such file or directory: \"%s\"", argv[args_offset + i] );
+    for( int i = 0; i < xnc.file.cnt; i++ ){
+        if( ! _get_file_info( argv[args_offset + i], &xnc.file.list[i] ) ){
+            einfof( "No such file path: \"%s\"", argv[args_offset + i] );
             return 1;
         }
+        xnc.file.sorted[i] = &xnc.file.list[i];
     }
+    xnc.file.sorted[xnc.file.cnt] = NULL;
+    qsort( xnc.file.sorted, xnc.file.cnt, sizeof( struct XncFile ** ), _sort_by_fsize );
 
-    // ファイルリストの先頭を取得
-    file = argv + args_offset;
-    
+    // ファイル
+    file = &xnc.file.sorted[0];
+
     // スレッドとジョブのテーブルを確保
     jobs.max = _get_cpu_cores();
-    if( jobs.max > xnc.id_cnt ) jobs.max = xnc.id_cnt;
+    if( jobs.max > xnc.file.cnt ) jobs.max = xnc.file.cnt;
 
     thr.max  = jobs.max + 2;
 
@@ -599,7 +621,7 @@ int main( int argc, char *argv[] )
         struct XncJob *j = jobs.slots + slot;
         char errmsg[XNC_ERRBUF_SIZE];
 
-        if( prepare_to_job( &xnc, j, *file ) == 0 ){
+        if( prepare_to_job( &xnc, j, (*file)->path ) == 0 ){
             if( ( j->rv = xnc.algo.fn_init( &xnc, j ) ) == 0 ){
                 fseek( j->fsrc.fh, 0, SEEK_SET );
                 if( rqueue_push( xnc.read, &j, sizeof( j ) ) == 0 ){
@@ -608,7 +630,7 @@ int main( int argc, char *argv[] )
                 }
             } else{
                 finish_job( j );
-                qinfof_try_push( xnc.error, "Failed to %s init (code %x): %s", xnc.algo.name, j->rv, *file );
+                qinfof_try_push( xnc.error, "Failed to %s init (code %x): %s", xnc.algo.name, j->rv, (*file)->path );
             }
         }
 
@@ -635,7 +657,7 @@ int main( int argc, char *argv[] )
             finish_job( j );
 
             if( *file ){
-                if( prepare_to_job( &xnc, j, *file ) == 0 ){
+                if( prepare_to_job( &xnc, j, (*file)->path ) == 0 ){
                     if( ( j->rv = xnc.algo.fn_init( &xnc, j ) ) == 0 ){
                         fseek( j->fsrc.fh, 0, SEEK_SET );
                         if( rqueue_push( xnc.read, &j, sizeof( j ) ) == 0 ){
@@ -644,7 +666,7 @@ int main( int argc, char *argv[] )
                     }
                 } else{
                     finish_job( j );
-                    qinfof_try_push( xnc.error, "Failed to %s init (code %x): %s", xnc.algo.name, j->rv, *file );
+                    qinfof_try_push( xnc.error, "Failed to %s init (code %x): %s", xnc.algo.name, j->rv, (*file)->path );
                 }
                 file++;
             }
@@ -717,7 +739,8 @@ int main( int argc, char *argv[] )
     free( thr.list );
     free( jobs.slots );
     free( xnc.buf_addr );
-    free( xnc.ids );
+    free( xnc.file.sorted );
+    free( xnc.file.list );
 
     return rv;
 }

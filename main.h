@@ -71,8 +71,11 @@ struct XncAlgo {
 struct Xnc {
     RqueueCtx *read, *work, *write, *idle, *error;
 
-    struct xnc_file_id *ids;
-    int                id_cnt;
+    struct {
+        int            cnt;
+        struct XncFile *list;
+        struct XncFile **sorted;
+    } file;
 
     unsigned char *buf_addr;
 
