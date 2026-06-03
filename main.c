@@ -702,30 +702,31 @@ int main( int argc, char *argv[] )
                 write( STDOUT_FILENO, str, pos );
             }
             lnoff = slot;
+        }
 
-            if( j && *file ){
-                if( prepare_to_job( &xnc, j, (*file)->path ) == 0 ){
-                    if( ( j->rv = xnc.algo.fn_init( &xnc, j ) ) == 0 ){
-                        fseek( j->fsrc.fh, 0, SEEK_SET );
+        // まだファイルがあれば次のファイルをキュー
+        if( j && *file ){
+            if( prepare_to_job( &xnc, j, (*file)->path ) == 0 ){
+                if( ( j->rv = xnc.algo.fn_init( &xnc, j ) ) == 0 ){
+                    fseek( j->fsrc.fh, 0, SEEK_SET );
 #ifndef _WIN32
-                        int fd = fileno( j->fsrc.fh );
+                    int fd = fileno( j->fsrc.fh );
 #if defined(__APPLE__)
-                        fcntl( fd, F_RDAHEAD, 1 );
+                    fcntl( fd, F_RDAHEAD, 1 );
 #else
-                        posix_fadvise( fd, 0, 0, POSIX_FADV_SEQUENTIAL );
+                    posix_fadvise( fd, 0, 0, POSIX_FADV_SEQUENTIAL );
 #endif
 #endif
-                        if( rqueue_push( xnc.read, &j, sizeof( j ) ) == 0 ){
-                            wip++;
-                            if( slot < jobs.max ) slot++;
-                        }
-                    } else{
-                        finish_job( j );
-                        qinfof_try_push( xnc.error, "Failed to %s init (code %x): %s", xnc.algo.name, j->rv, (*file)->path );
+                    if( rqueue_push( xnc.read, &j, sizeof( j ) ) == 0 ){
+                        wip++;
+                        if( slot < jobs.max ) slot++;
                     }
+                } else{
+                    finish_job( j );
+                    qinfof_try_push( xnc.error, "Failed to %s init (code %x): %s", xnc.algo.name, j->rv, (*file)->path );
                 }
-                file++;
             }
+            file++;
         }
         
         while( rqueue_try_pop( xnc.error, errmsg, sizeof( errmsg ) ) == 0 ){
