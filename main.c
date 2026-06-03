@@ -200,7 +200,10 @@ int xnc_write_salt( struct XncJob *job, const unsigned char *salt, size_t len )
 static int parse_args( struct Xnc *xnc, int argc, char *argv[] )
 {
     int mdchk = 0, opt;
-    while( ( opt = getopt( argc, argv, "edfvo:x:a:p:n" ) ) != -1 ){
+    int cpu_cores = _get_cpu_cores();
+    xnc->jobs = cpu_cores / 2;
+
+    while( ( opt = getopt( argc, argv, "edfvo:x:a:p:nj:" ) ) != -1 ){
         switch( opt ){
             case 'd':
                 xnc->mode = XNC_DECODE;
@@ -223,6 +226,16 @@ static int parse_args( struct Xnc *xnc, int argc, char *argv[] )
                 break;
             case 'n':
                 xnc->flags |= XNC_F_NO_STRETCH;
+                break;
+            case 'j':
+                {
+                    char *end;
+                    xnc->jobs = strtol( optarg, &end, 10 );
+                    if( end == optarg || *end != '\0' ){
+                        einfof( "Invalid number of jobs: %s", optarg );
+                        return -1;
+                    }
+                }
                 break;
             default:
                 einfof( "Invalid argument: %c\n", opt );
@@ -268,6 +281,14 @@ static int parse_args( struct Xnc *xnc, int argc, char *argv[] )
     } else{
         einfo( "Unknown algorithm specified.\n" );
         return -1;
+    }
+
+    // ジョブ数を計算
+    if( xnc->jobs == 0 || xnc->jobs > cpu_cores ){
+        xnc->jobs = cpu_cores;
+    } else if( xnc->jobs < 0 ){
+        xnc->jobs = cpu_cores + xnc->jobs;
+        if( xnc->jobs <= 0 ) xnc->jobs = 1;
     }
 
     // 引数が足りなければ失敗
@@ -502,7 +523,7 @@ static int _sort_by_fsize( const void *a, const void *b )
 
 int main( int argc, char *argv[] )
 {
-    int rv = 0, args_offset, slot = 0, inprogress = 0, lnoff = 0;
+    int rv = 0, args_offset, slot = 0, wip = 0, lnoff = 0, progress_interval = 0;
     struct XncFile **file;
 
     struct {
@@ -523,9 +544,9 @@ int main( int argc, char *argv[] )
     }
 
     // 衝突検知用のファイル識別子リストを作成
-    xnc.file.cnt = argc - args_offset;
-    xnc.file.list = malloc( sizeof( struct XncFile ) * xnc.file.cnt );
-    xnc.file.sorted = malloc( sizeof( struct XncFile ) * ( xnc.file.cnt + 1 ) );
+    xnc.file.cnt    = argc - args_offset;
+    xnc.file.list   = malloc( sizeof( struct XncFile )   * xnc.file.cnt );
+    xnc.file.sorted = malloc( sizeof( struct XncFile * ) * ( xnc.file.cnt + 1 ) );
     if( ! xnc.file.list || ! xnc.file.sorted ){
         einfo( "Failed to allocate file id table." );
         return 1;
@@ -537,14 +558,14 @@ int main( int argc, char *argv[] )
         }
         xnc.file.sorted[i] = &xnc.file.list[i];
     }
-    xnc.file.sorted[xnc.file.cnt] = NULL;
-    qsort( xnc.file.sorted, xnc.file.cnt, sizeof( struct XncFile ** ), _sort_by_fsize );
+    xnc.file.sorted[xnc.file.cnt] = NULL; //argvの仕様に合わせて終端にNULL
+    qsort( xnc.file.sorted, xnc.file.cnt, sizeof( struct XncFile * ), _sort_by_fsize );
 
     // ファイル
     file = &xnc.file.sorted[0];
 
     // スレッドとジョブのテーブルを確保
-    jobs.max = _get_cpu_cores();
+    jobs.max = xnc.jobs;
     if( jobs.max > xnc.file.cnt ) jobs.max = xnc.file.cnt;
 
     thr.max  = jobs.max + 2;
@@ -607,69 +628,32 @@ int main( int argc, char *argv[] )
     }
     for( int i = 2; i < thr.max; i++ ){
         if( ! thrw_new( thread_worker, (void *)&xnc, thr.list + i ) ){
-            einfo( "Failed to initialize workerthread." );
+            einfo( "Failed to initialize worker thread." );
             return 1;
         }
     }
     
     // 進捗表示準備
-   fflush( stdout );
-   fflush( stderr );
+    fflush( stdout );
+    fflush( stderr );
 
-    // ジョブを使えるだけ使う
-    while( *file && slot < jobs.max ){
-        struct XncJob *j = jobs.slots + slot;
-        char errmsg[XNC_ERRBUF_SIZE];
-
-        if( prepare_to_job( &xnc, j, (*file)->path ) == 0 ){
-            if( ( j->rv = xnc.algo.fn_init( &xnc, j ) ) == 0 ){
-                fseek( j->fsrc.fh, 0, SEEK_SET );
-                if( rqueue_push( xnc.read, &j, sizeof( j ) ) == 0 ){
-                    inprogress++;
-                    slot++;
-                }
-            } else{
-                finish_job( j );
-                qinfof_try_push( xnc.error, "Failed to %s init (code %x): %s", xnc.algo.name, j->rv, (*file)->path );
-            }
-        }
-
-        while( rqueue_try_pop( xnc.error, errmsg, sizeof( errmsg ) ) == 0 ){
-            write( STDERR_FILENO, errmsg, strlen( errmsg ) );
-        }
-        
-        file++;
-    }
-
-    // ジョブが終わったら新しいジョブを設定してキュー
+    // ジョブを設定してキュー
     lnoff = 0;
-    while( *file || inprogress ){
+    while( *file || wip ){
         struct XncJob *j;
         char errmsg[XNC_ERRBUF_SIZE];
 
-        //スレッドからの終了通知を待つ
-        if( rqueue_timed_pop( xnc.idle, &j, sizeof( j ), 1000 ) == 0 ){
+        if( rqueue_timed_pop( xnc.idle, &j, sizeof( j ), progress_interval ) == 0 ){
             // ジョブ1つ完了
-            inprogress--;
-
+            wip--;
             xnc.algo.fn_destroy( &xnc, j );
-
             finish_job( j );
-
-            if( *file ){
-                if( prepare_to_job( &xnc, j, (*file)->path ) == 0 ){
-                    if( ( j->rv = xnc.algo.fn_init( &xnc, j ) ) == 0 ){
-                        fseek( j->fsrc.fh, 0, SEEK_SET );
-                        if( rqueue_push( xnc.read, &j, sizeof( j ) ) == 0 ){
-                            inprogress++;
-                        }
-                    }
-                } else{
-                    finish_job( j );
-                    qinfof_try_push( xnc.error, "Failed to %s init (code %x): %s", xnc.algo.name, j->rv, (*file)->path );
-                }
-                file++;
-            }
+        } else if( slot < jobs.max ){
+            // 未使用のジョブスロットあり
+            j = jobs.slots + slot;
+        } else{
+            j = NULL;
+            if( progress_interval == 0 ) progress_interval = 1000;
         }
 
         // 進捗表示
@@ -683,8 +667,8 @@ int main( int argc, char *argv[] )
                 write( STDOUT_FILENO, str, pos );
             }
 
-            for( int i = 0; i < jobs.max; i++ ){
-                progress = atomic_load( &(jobs.slots[i].progress) );
+            for( int i = 0; i < slot; i++ ){
+                progress = atomic_load( &jobs.slots[i].progress );
                 filled = progress * XNC_PROGBAR_LEN / 100;
                 left  = progress == 100 ? 0 : XNC_PROGBAR_LEN - filled - 1;
                 pos = snprintf( str, sizeof( str ), "\x1b[2K%s %2d [\x1b[32m", xnc_get_mode_name( jobs.slots + i ), i );
@@ -704,7 +688,23 @@ int main( int argc, char *argv[] )
                 pos += snprintf( str + pos, sizeof( str ) - pos,"\x1b[0m] %3d%% %-32.32s\n", progress, path );
                 write( STDOUT_FILENO, str, pos );
             }
-            lnoff = jobs.max;
+            lnoff = slot;
+
+            if( j && *file ){
+                if( prepare_to_job( &xnc, j, (*file)->path ) == 0 ){
+                    if( ( j->rv = xnc.algo.fn_init( &xnc, j ) ) == 0 ){
+                        fseek( j->fsrc.fh, 0, SEEK_SET );
+                        if( rqueue_push( xnc.read, &j, sizeof( j ) ) == 0 ){
+                            wip++;
+                            if( slot < jobs.max ) slot++;
+                        }
+                    }
+                } else{
+                    finish_job( j );
+                    qinfof_try_push( xnc.error, "Failed to %s init (code %x): %s", xnc.algo.name, j->rv, (*file)->path );
+                }
+                file++;
+            }
         }
         
         while( rqueue_try_pop( xnc.error, errmsg, sizeof( errmsg ) ) == 0 ){
@@ -736,6 +736,7 @@ int main( int argc, char *argv[] )
     rqueue_destroy( xnc.error );
 
     for( int i = 0; i < jobs.max; i++ ) hash_destroy( jobs.slots[i].hs );
+
     free( thr.list );
     free( jobs.slots );
     free( xnc.buf_addr );

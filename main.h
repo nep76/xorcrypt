@@ -82,6 +82,7 @@ struct Xnc {
     struct XncAlgo algo;
     enum XncMode   mode;
     uint32_t       flags;
+    int            jobs;
     char           *ext;
     char           *outdir;
     struct {

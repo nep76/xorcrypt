@@ -35,6 +35,9 @@ int sema_trywait( SemaCtx *c )
 int sema_timedwait( SemaCtx *c, time_t timeout )
 {
     struct timespec ts;
+
+    if( timeout == 0 ) return sem_trywait( c );
+
     if( clock_gettime( CLOCK_REALTIME, &ts ) != 0 ) return -1;
 
     ts.tv_sec  += timeout / 1000;
