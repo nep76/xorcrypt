@@ -1,6 +1,8 @@
+#define _GNU_SOURCE
 #include "sema.h"
 
 #include <stdlib.h>
+#include <time.h>
 
 SemaCtx *sema_new( int initial, SemaCtx *reuse )
 {
@@ -36,7 +38,7 @@ int sema_timedwait( SemaCtx *c, time_t timeout )
 {
     struct timespec ts;
 
-    if( timeout == 0 ) return sem_trywait( c );
+    if( timeout == 0 ) return sem_trywait( &c->sema );
 
     if( clock_gettime( CLOCK_REALTIME, &ts ) != 0 ) return -1;
 

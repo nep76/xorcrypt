@@ -46,3 +46,12 @@ int thrw_destroy( ThrwCtx *c )
     return rv ? 0 : -1;
 }
 
+int thrw_set_background_self( void )
+{
+    return SetThreadPriority( GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN ) ? 0 : -1;
+}
+
+int thrw_set_foreground_self( void )
+{
+    return SetThreadPriority( GetCurrentThread(), THREAD_MODE_BACKGROUND_END ) ? 0 : -1;
+}

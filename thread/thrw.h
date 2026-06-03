@@ -28,4 +28,7 @@ ThrwCtx *thrw_new( ThrwMain cb, void *argp, ThrwCtx *reuse );
 int thrw_wait_for_exit( ThrwCtx *c );
 int thrw_destroy( ThrwCtx *c );
 
+int thrw_set_background_self( void );
+int thrw_set_foreground_self( void );
+
 #endif

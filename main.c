@@ -10,6 +10,7 @@
 #include <io.h>
 #else
 #include <unistd.h>
+#include <fcntl.h>
 #endif
 
 #include "info.h"
@@ -143,7 +144,7 @@ static void _usage( char *path )
         name = XNC_NAME;
     }
     einfof( "Xor deNCrypter %s", XNC_VERSION );
-    einfof( "Usage: %s [-ednfv] [-o dir] [-x ext] [-p passwd] [-a xor|seed-xor] file [file ...]", name );
+    einfof( "Usage: %s [-ednfv] [-o dir] [-x ext] [-j num_jobs] [-p passwd] [-a xor|seed-xor] file [file ...]", name );
 }
 
 char *xnc_get_mode_name( struct XncJob *job )
@@ -309,8 +310,13 @@ int thread_read( void *argp )
         read = ( job->fsrc.size - job->fsrc.cur_offset < XNC_BUF_SIZE ) ?
             job->fsrc.size - job->fsrc.cur_offset : XNC_BUF_SIZE;
 
+        thrw_set_background_self();
+
         job->fsrc.read_bytes = fread( job->buf, 1, read, job->fsrc.fh );
         job->fsrc.cur_offset += job->fsrc.read_bytes;
+
+        thrw_set_foreground_self();
+
         if( job->fsrc.read_bytes < XNC_BUF_SIZE && ferror( job->fsrc.fh ) ){
             job->rv = -1;
             qinfof_try_push( xnc->error, "Failed to read input file: %s", "" );
@@ -328,11 +334,18 @@ int thread_write( void *argp )
 {
     const struct Xnc *xnc = argp;
     struct XncJob *job;
+    size_t wrote = 0;
 
     while( rqueue_pop( xnc->write, &job, sizeof( job ) ) == 0 ){
         if( ! job ) break;
 
-        if( fwrite( job->buf, 1, job->fsrc.read_bytes, job->fdst.fh ) != job->fsrc.read_bytes ){
+        thrw_set_background_self();
+
+        wrote = fwrite( job->buf, 1, job->fsrc.read_bytes, job->fdst.fh );
+
+        thrw_set_foreground_self();
+
+        if( wrote != job->fsrc.read_bytes ){
             char *file = strrchr( job->fdst.path, '/' );
             if( ! file ) file = job->fdst.path;
             qinfof_try_push( xnc->error, "Failed to write output file: %s", file );
@@ -694,14 +707,22 @@ int main( int argc, char *argv[] )
                 if( prepare_to_job( &xnc, j, (*file)->path ) == 0 ){
                     if( ( j->rv = xnc.algo.fn_init( &xnc, j ) ) == 0 ){
                         fseek( j->fsrc.fh, 0, SEEK_SET );
+#ifndef _WIN32
+                        int fd = fileno( j->fsrc.fh );
+#if defined(__APPLE__)
+                        fcntl( fd, F_RDAHEAD, 1 );
+#else
+                        posix_fadvise( fd, 0, 0, POSIX_FADV_SEQUENTIAL );
+#endif
+#endif
                         if( rqueue_push( xnc.read, &j, sizeof( j ) ) == 0 ){
                             wip++;
                             if( slot < jobs.max ) slot++;
                         }
+                    } else{
+                        finish_job( j );
+                        qinfof_try_push( xnc.error, "Failed to %s init (code %x): %s", xnc.algo.name, j->rv, (*file)->path );
                     }
-                } else{
-                    finish_job( j );
-                    qinfof_try_push( xnc.error, "Failed to %s init (code %x): %s", xnc.algo.name, j->rv, (*file)->path );
                 }
                 file++;
             }

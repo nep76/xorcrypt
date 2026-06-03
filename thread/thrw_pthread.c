@@ -1,7 +1,14 @@
+#define _GNU_SOURCE
 #include "thrw.h"
 
 #include <stdlib.h>
 #include <pthread.h>
+
+#ifndef __APPLE__
+#include <unistd.h>
+#include <sys/syscall.h>
+#include <sys/types.h>
+#endif
 
 static void *thread_start( void *c )
 {
@@ -35,4 +42,24 @@ int thrw_destroy( ThrwCtx *c )
 {
     if( c->free ) free( c );
     return 0;
+}
+
+int thrw_set_background_self( void )
+{
+#if defined(__APPLE__)
+    return pthread_set_qos_class_self_np( QOS_CLASS_BACKGROUND, 0 );
+#else
+    pid_t thid = syscall( SYS_gettid );
+    return syscall( SYS_ioprio_set, 1, thid, (((2) << 13) | (7)) );
+#endif
+}
+
+int thrw_set_foreground_self( void )
+{
+#if defined(__APPLE__)
+    return pthread_set_qos_class_self_np( QOS_CLASS_USER_INITIATED, 0 );
+#else
+    pid_t thid = syscall( SYS_gettid );
+    return syscall( SYS_ioprio_set, 1, thid, (((2) << 13) | (4)) );
+#endif
 }
