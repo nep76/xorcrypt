@@ -42,7 +42,7 @@ else
 	SRCS += hash/hash_openssl.c \
 			thread/thrw_pthread.c \
 			thread/mutex_pthread.c \
-			thread/sema_pthread.c
+			thread/sema_posix.c
 	LIBS += -lcrypto -lpthread
 endif
 
