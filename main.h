@@ -36,10 +36,12 @@
 #define XNC_BUF_SIZE      4096000 //4MB
 #define XNC_BUF_ALIGN     32 // AVX2
 #define XNC_ERRBUF_SIZE   256
-#define XNC_STRETCH_TIMES 100000
+
+#define XNC_STRETCH_TIMES 300000
+#define XNC_STRETCH_MASK  0x4BADC0DE
+
 #define XNC_SEED_STATE    0xC0DECAFE // ストリームに混ぜる定数 state用
 #define XNC_SEED_KS       0x00C0FFEE // ストリームに混ぜる定数 ks用
-#define XNC_SEED_MAC      0x03ACBEEF // MAC用定数
 
 #define XNC_F_AUTODETECT  0x00000001
 #define XNC_F_VERBOSE     0x00000002
@@ -48,6 +50,9 @@
 
 #if ( XNC_BUF_SIZE % XNC_BUF_ALIGN ) != 0
 #error "XNC_BUF_SIZE must be a multiple of XNC_BUF_ALIGN"
+#endif
+#if XNC_SALT_SIZE < 32
+#error "XNC_SALT_SIZE must be at least 32"
 #endif
 
 #include "hash.h"
