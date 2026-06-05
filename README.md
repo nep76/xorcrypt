@@ -31,7 +31,7 @@ make clean
 
 ## Usage
 ```text
-Usage: xorcrypt [-ednfv] [-o dir] [-x ext] [-p passwd ] [-a xor|seed-xor] file [file ...]
+Usage: xorcrypt [-ednfv] [-o dir] [-x ext] [-j num_jobs] [-p passwd] [-a xor|seed-xor] file [file ...]
 ```
 * `-e`: 指定されたファイルを難読化するスクランブルモードを強制  
 （無指定で自動判別）
@@ -109,7 +109,7 @@ SHA256の拡散効果で単純XORよりもパターンが隠ぺいされやす�
 
 ### Algorithm
 1. ランダムな`salt`とパスワードから初期`state`を作る
-1. `state`を 100,000回さらに再ハッシュ化して鍵伸長を行う
+1. `state`を さらに何度も再ハッシュ化して鍵伸長を行う
 1. `state`を使って`keystream`を生成しXOR演算で変換していく
 1. 32バイト処理するごとに`state`と`keystream`を更新する 
 1. 最後に`salt`をファイル末尾に書き込む
@@ -118,20 +118,31 @@ SHA256の拡散効果で単純XORよりもパターンが隠ぺいされやす�
 一応復号するための手順と概念的なコードを書いておきます。コード中でハッシュ関数に入力する整数値はすべてビッグエンディアンです。(BE32やBE64と表記します)
 
 1. まずファイルの末尾に記録されている32バイトの`salt`を取り出します。
-2. 取り出した`salt`と設定した`password`(最大64バイト)を使って以下の方法で`pre-stateを生成します。
+2. `salt`の各バイトの最下位ビットを繋げると鍵伸長回数になるのでそれを計算します。
 ```text
-pre-state = SHA256( BE32(0xC0DECAFE) || 0(パディング28バイト分) || BE32(0) || salt || password )
+// saltの各バイトの最下位ビットを集めて32ビット整数値を作る
+stretch-times = 0
+for( 0 <= i < 32 )
+    stretch-times = stretch-times | ( ( salt[i] & 0x01 ) << ( 31 - i ) );
 ```
-3. 次にこの`pre-state`をHMAC-SHA256で再ハッシュ化を100,000回繰り返して簡易鍵伸長をします。もし`-n`スイッチで鍵伸長せずに処理したデータの場合はこの工程を丸ごと飛ばしてください。
+3. `stretch-times`は撹拌用の定数でXOR演算されているので以下の方法で復元します。
 ```text
-for( 0 <= i < 100000 )
+stretch-times = stretch-times ^ 0x4BADC0DE
+```
+4. `salt`と設定した`password`(最大64バイト)を使って以下の方法で`pre-state`を生成します。
+```text
+pre-state = SHA256( BE32(0xC0DECAFE) || salt || password )
+```
+5. `pre-state`をHMAC-SHA256で再ハッシュ化を繰り返して簡易鍵伸長をします。鍵伸長回数は手順2-3で取り出した`stretch-times`です。
+```text
+for( 0 <= i < stretch-times )
     pre-state = HMAC-SHA256( key=pre-state, message=BE32(i) )
 ```
-4. 鍵伸長を終えた`pre-state`を以下のようにハッシュ化して初期`state`を生成します。
+6. 鍵伸長を終えた`pre-state`を以下のようにハッシュ化して初期`state`を生成します。
 ```text
 initial state = HMAC-SHA256( key=pre-state, message=BE32(0xC0DECAFE) || BE64(0) )
 ```
-5. この`state`を使って`keystream`を生成し、実際にXOR演算をしていきます。ただし、SHA256のビット長である32バイト処理するごとにこれらを更新します。
+7. この`state`を使って`keystream`を生成し実際にXOR演算をしていきます。ただしSHA256のビット長である32バイト処理するごとにこれらを更新します。
 ```text
 // カウンターを 1 で初期化
 counter = 1
@@ -157,5 +168,5 @@ for( 0 <= i < blocks )
     for( 0 <= j < length )
         plaintext[offset + j] = ciphertext[offset + j] ^ keystream[j]
 ```
-6. バグがなければこれで復号できる…はず。
+8. バグがなければこれで復号できる…はず。
 </details>

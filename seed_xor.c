@@ -11,59 +11,53 @@ struct XncSeedXor{
 
 struct XncSeedXorMsg{
     uint32_t label_be;
-    uint64_t cnt_be;
+    uint64_t cnt_be;    
 } __attribute__((packed));
 
-static void create_initial_state( const char *passwd,
-                                  const size_t plen,
-                                  struct XncHash *hs,
-                                  int stretch_disable,
-                                  struct XncSeedXor *c )
+static void _create_initial_state( const char *passwd,
+                                   const size_t plen,
+                                   struct XncHash *hs,
+                                   const uint32_t stretch_times,
+                                   struct XncSeedXor *c )
 {
     uint32_t label_be = xnc_be32( XNC_SEED_STATE );
     struct XncSeedXorMsg msg;
 
-    // [STATE] || [i] || [SALT] || [PASSWD]
+    unsigned char pre_state[XNC_HASH_SIZE];
     struct {
-        unsigned char state[XNC_HASH_SIZE];
-        uint32_t      i_be;
+        uint32_t i_be;
         unsigned char salt[XNC_SALT_SIZE];
         unsigned char passwd[XNC_MAX_PASSWD];
     } __attribute__((packed)) stretch;
 
     // pre-state準備
-    memset( stretch.state, 0, sizeof( stretch.state ) );    // 本来32バイトのstateを入れる場所に
-    memcpy( stretch.state, &label_be, sizeof( label_be ) ); // 代わりにlabelを挿入
-    stretch.i_be = xnc_be32( 0 ); // 0 ゼロ！
+    stretch.i_be = xnc_be32( XNC_SEED_STATE );
     memcpy( stretch.salt, c->salt, sizeof( stretch.salt ) );
     if( passwd ) memcpy( stretch.passwd, passwd, plen );
 
     // pre-state 生成
-    hash_sha256( hs, (unsigned char *)&stretch, sizeof( stretch ) - sizeof( stretch.passwd ) + plen, stretch.state );
+    hash_sha256( hs, (unsigned char *)&stretch, sizeof( stretch ) - sizeof( stretch.passwd ) + plen, pre_state );
     
     // key_stretchは SHA256 をin-place（入力と出力に同じポインタを指定）で更新するバッファ。
     // CNG/OpenSSLのSHA256は入力を読み終えてから出力を書くためin-placeでも安全。
     // 初回はstateの代わりにlabel（4バイト）を入れるので、未使用領域をゼロクリアしている。
     
     // 鍵伸長
-    if( ! stretch_disable ){
-        // 0 ゼロから！
-        for( int i = 0; i < XNC_STRETCH_TIMES; i++ ){
-            stretch.i_be = xnc_be32( i );
-            hash_sha256hmac( hs,
-                             (unsigned char *)&stretch.i_be,
-                             sizeof( stretch.i_be ),
-                             stretch.state,
-                             sizeof( stretch.state ),
-                             stretch.state );
-        }
+    for( uint32_t i = 0; i < stretch_times; i++ ){
+        stretch.i_be = xnc_be32( i );
+        hash_sha256hmac( hs,
+                         (unsigned char *)&stretch.i_be,
+                         sizeof( stretch.i_be ),
+                         pre_state,
+                         sizeof( pre_state ),
+                         pre_state );
     }
 
     // initial state生成
     c->cnt = 0;
     msg.label_be = label_be;
     msg.cnt_be = xnc_be64( c->cnt );
-    hash_sha256hmac( hs, (unsigned char *)&msg, sizeof( msg ), stretch.state, sizeof( stretch.state ), c->state );
+    hash_sha256hmac( hs, (unsigned char *)&msg, sizeof( msg ), pre_state, sizeof( pre_state ), c->state );
     c->cnt++;
 }
 
@@ -120,6 +114,7 @@ int seed_xor_finish( const struct Xnc *xnc, struct XncJob *job )
 
 int seed_xor_init( const struct Xnc *xnc, struct XncJob *job )
 {
+    uint32_t stretch_times;
     struct XncSeedXor *c = malloc( sizeof( *c ) );
     if( ! c ) return -1;
 
@@ -129,13 +124,26 @@ int seed_xor_init( const struct Xnc *xnc, struct XncJob *job )
                 free( c );
                 return -2;
             }
+
+            // saltの各バイト最下位ビットから鍵伸長回数を取り出す
+            stretch_times = 0;
+            for( int i = 0; i < 32; i++ ){
+                stretch_times |= ( ( c->salt[i] & 0x01 ) << ( 31 - i ) );
+            }
             break;
         case XNC_ENCODE:
             xnc_create_salt( job, c->salt, sizeof( c->salt ) );
+
+            // saltの各バイト最下位ビットに鍵伸長回数を埋め込む
+            stretch_times = ( ( xnc->flags & XNC_F_NO_STRETCH ) ? 0 : XNC_STRETCH_TIMES ) ^ XNC_STRETCH_MASK;
+            for( int i = 0; i < 32; i++ ){
+                c->salt[i] = ( c->salt[i] & 0xFE ) | ( ( stretch_times >> ( 31 - i ) ) & 0x01 );
+            }
             break;
     }
+    stretch_times ^= XNC_STRETCH_MASK;
 
-    create_initial_state( xnc->passwd.string, xnc->passwd.length, job->hs, xnc->flags & XNC_F_NO_STRETCH, c );
+    _create_initial_state( xnc->passwd.string, xnc->passwd.length, job->hs, stretch_times, c );
 
     // jobにコンテキストを紐づけ
     xnc_set_algo_ctx( job, c );
