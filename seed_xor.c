@@ -125,23 +125,24 @@ int seed_xor_init( const struct Xnc *xnc, struct XncJob *job )
                 return -2;
             }
 
-            // saltの各バイト最下位ビットから鍵伸長回数を取り出す
+            // saltの各バイトのビット0から鍵伸長回数をビット1とのXOR値で取り出す
             stretch_times = 0;
             for( int i = 0; i < 32; i++ ){
-                stretch_times |= ( ( c->salt[i] & 0x01 ) << ( 31 - i ) );
+                unsigned char bit0 = ( c->salt[i] & 0x01 ) ^ ( ( c->salt[i] >>1 ) & 0x01 );
+                stretch_times |= ( bit0 << ( 31 - i ) );
             }
             break;
         case XNC_ENCODE:
             xnc_create_salt( job, c->salt, sizeof( c->salt ) );
 
-            // saltの各バイト最下位ビットに鍵伸長回数を埋め込む
-            stretch_times = ( ( xnc->flags & XNC_F_NO_STRETCH ) ? 0 : XNC_STRETCH_TIMES ) ^ XNC_STRETCH_MASK;
+            // saltの各バイトのビット0から鍵伸長回数をビット1とのXOR値で埋め込む
+            stretch_times = ( xnc->flags & XNC_F_NO_STRETCH ) ? 0 : XNC_STRETCH_TIMES;
             for( int i = 0; i < 32; i++ ){
-                c->salt[i] = ( c->salt[i] & 0xFE ) | ( ( stretch_times >> ( 31 - i ) ) & 0x01 );
+                unsigned char bit0 = ( ( stretch_times >> ( 31 - i ) ) & 0x01 ) ^ ( ( c->salt[i] >> 1 ) & 0x01 );
+                c->salt[i] = ( c->salt[i] & 0xFE ) | bit0;
             }
             break;
     }
-    stretch_times ^= XNC_STRETCH_MASK;
 
     _create_initial_state( xnc->passwd.string, xnc->passwd.length, job->hs, stretch_times, c );
 

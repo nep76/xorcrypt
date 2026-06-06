@@ -38,7 +38,6 @@
 #define XNC_ERRBUF_SIZE   256
 
 #define XNC_STRETCH_TIMES 300000
-#define XNC_STRETCH_MASK  0x4BADC0DE
 
 #define XNC_SEED_STATE    0xC0DECAFE // ストリームに混ぜる定数 state用
 #define XNC_SEED_KS       0x00C0FFEE // ストリームに混ぜる定数 ks用
