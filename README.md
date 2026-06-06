@@ -120,16 +120,22 @@ SHA256の拡散効果で単純XORよりもパターンが隠ぺいされやす�
 1. まずファイルの末尾に記録されている32バイトの`salt`を取り出します。
 2. `salt`の各バイトの最下位ビットを繋げると鍵伸長回数になるのでそれを計算します。
 ```text
-// saltの各バイトの最下位ビットを集めて32ビット整数値を作る
+// saltの各バイトの最下位ビット（ビット0）を集めて32ビット整数値を作る
 stretch-times = 0
 for( 0 <= i < 32 )
     stretch-times = stretch-times | ( ( salt[i] & 0x01 ) << ( 31 - i ) );
 ```
-3. `stretch-times`は撹拌用の定数でXOR演算されているので以下の方法で復元します。
+3. `stretch-times`は隣のビット（ビット1）ランダム性を借りて撹拌されているのでそれを取り出してXOR演算で鍵伸長回数を復元します。
 ```text
-stretch-times = stretch-times ^ 0x4BADC0DE
+// saltの各バイトの最下位ビットの隣のビット（ビット1）を集めて32ビット整数値を作る
+stretch-mask = 0
+for( 0 <= i < 32 )
+    stretch-mask = stretch-mask | ( ( ( salt[i] >> 1 ) & 0x01 ) << ( 31 - i ) );
+
+// XORして鍵伸長回数を取り出す
+stretch-times = stretch-times ^ stretch-mask
 ```
-4. `salt`と設定した`password`(最大64バイト)を使って以下の方法で`pre-state`を生成します。
+4. `salt`と`password`(最大64バイト)を使って以下の方法で`pre-state`を生成します。
 ```text
 pre-state = SHA256( BE32(0xC0DECAFE) || salt || password )
 ```
