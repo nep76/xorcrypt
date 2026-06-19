@@ -4,7 +4,7 @@
 #define UNUSED( v ) ((void)v)
 
 #define XNC_NAME    "xorcrypt"
-#define XNC_VERSION "260606-00"
+#define XNC_VERSION "260619-00"
 
 struct Xnc;
 struct XncJob;

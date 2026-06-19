@@ -318,8 +318,10 @@ int thread_read( void *argp )
         thrw_set_foreground_self();
 
         if( job->fsrc.read_bytes < XNC_BUF_SIZE && ferror( job->fsrc.fh ) ){
+            char *file = strrchr( job->fsrc.path, '/' );
+            file = file ? file + 1 : job->fsrc.path;
             job->rv = -1;
-            qinfof_try_push( xnc->error, "Failed to read input file: %s", "" );
+            qinfof_try_push( xnc->error, "Failed to read input file: %s", file );
             rqueue_push( xnc->idle, &job, sizeof( job ) );
             continue;
         }
@@ -347,23 +349,28 @@ int thread_write( void *argp )
 
         if( wrote != job->fsrc.read_bytes ){
             char *file = strrchr( job->fdst.path, '/' );
-            if( ! file ) file = job->fdst.path;
+            file = file ? file + 1 : job->fdst.path;
+            job->rv = -1;
             qinfof_try_push( xnc->error, "Failed to write output file: %s", file );
             rqueue_push( xnc->idle, &job, sizeof( job ) );
             continue;
         }
-
-        atomic_store( &(job->progress), (int)( job->fsrc.cur_offset * 100ULL / job->fsrc.size ) );
         
         if( job->fsrc.cur_offset < job->fsrc.size ){
+            atomic_store( &(job->progress), (int)( job->fsrc.cur_offset * 100ULL / job->fsrc.size ) );
             rqueue_push( xnc->read, &job, sizeof( job ) );
         } else{
+            if( job->fsrc.cur_offset > job->fsrc.size ){
+                qinfo_try_push( xnc->error, "Failed to write output file: Invalid offset" );
+                job->rv = -1;
+            } else{
+                atomic_store( &(job->progress), 100 );
+            }
             rqueue_push( xnc->idle, &job, sizeof( job ) );
         }
     }
 
     return 0;
-
 }
 
 int thread_worker( void *argp )
@@ -389,7 +396,6 @@ int thread_worker( void *argp )
 static int prepare_to_job( struct Xnc *xnc, struct XncJob *job, const char *file )
 {
     int store_len;
-    char src_path[PATH_MAX];
     char *outdir, *dot;
     struct stat st;
 
@@ -405,7 +411,7 @@ static int prepare_to_job( struct Xnc *xnc, struct XncJob *job, const char *file
         goto SKIP;
     }
 
-    store_len = snprintf( src_path, PATH_MAX, "%s/%s", path_dir, path_file );
+    store_len = snprintf( job->fsrc.path, PATH_MAX, "%s/%s", path_dir, path_file );
     if( store_len >= PATH_MAX ){
         qinfof_try_push( xnc->error, "Input file path is too long: %s", path_file );
         goto SKIP;
@@ -426,14 +432,14 @@ static int prepare_to_job( struct Xnc *xnc, struct XncJob *job, const char *file
         job->mode = xnc->mode;
     }
 
-    if( stat( src_path, &st ) != 0 || ! S_ISREG( st.st_mode ) ){
+    if( stat( job->fsrc.path, &st ) != 0 || ! S_ISREG( st.st_mode ) ){
         goto SKIP;
     }
     job->fsrc.size = st.st_size;
 
-    job->fsrc.fh = fopen( src_path, "rb" );
+    job->fsrc.fh = fopen( job->fsrc.path, "rb" );
     if( ! job->fsrc.fh ){
-        qinfof_try_push( xnc->error, "Failed to open input file: %s", src_path );
+        qinfof_try_push( xnc->error, "Failed to open input file: %s", job->fsrc.path );
         goto NEXT;
     }
 
@@ -462,7 +468,7 @@ static int prepare_to_job( struct Xnc *xnc, struct XncJob *job, const char *file
     }
 
     // エラーチェック
-    if( strcasecmp( src_path, job->fdst.path ) == 0 ){
+    if( strcasecmp( job->fsrc.path, job->fdst.path ) == 0 ){
         qinfo_try_push( xnc->error, "Source and output paths are the same. Skipped." );
         goto NEXT;
     }
