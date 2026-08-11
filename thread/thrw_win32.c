@@ -1,8 +1,6 @@
 #include "thrw.h"
 
 #include <process.h>
-#include <handleapi.h>
-#include <synchapi.h>
 
 static unsigned int __stdcall thread_start( void *c )
 {

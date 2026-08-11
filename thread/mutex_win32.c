@@ -2,7 +2,6 @@
 
 #include <stdlib.h>
 #include <stddef.h>
-#include <synchapi.h>
 
 MutexCtx *mutex_new( MutexCtx *reuse )
 {

@@ -1,8 +1,6 @@
 #include "sema.h"
 
 #include <stdlib.h>
-#include <winbase.h>
-#include <synchapi.h>
 
 SemaCtx *sema_new( int initial, SemaCtx *reuse )
 {
